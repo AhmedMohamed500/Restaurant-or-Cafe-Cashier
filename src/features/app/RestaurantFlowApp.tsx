@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { db } from "@/src/db/database";
-import { ensureSeedData, resetDemoData } from "@/src/db/seed";
-import { calculateRecipeCost, completeSale, executeProduction } from "@/src/domain/inventory-service";
+import { ensureEmptyWorkspace, resetAllData } from "@/src/db/seed";
+import { addOpeningStock, calculateRecipeCost, completeSale, executeProduction } from "@/src/domain/inventory-service";
 import type {
   InventoryItem,
   OrderItem,
@@ -17,7 +17,7 @@ import type {
 import { formatMoney, formatQuantity } from "@/src/lib/money";
 
 type Section = "units" | "items" | "warehouses" | "recipes" | "production" | "movements" | "costing" | "pos";
-type ModalName = "unit" | "item" | "warehouse" | "recipe" | "production" | null;
+type ModalName = "unit" | "item" | "warehouse" | "recipe" | "production" | "movement" | null;
 
 const navItems: { id: Section; icon: string; label: string; eyebrow: string }[] = [
   { id: "units", icon: "⌁", label: "الوحدات", eyebrow: "01 · البنية الأساسية" },
@@ -87,7 +87,7 @@ export function RestaurantFlowApp() {
   }, []);
 
   useEffect(() => {
-    ensureSeedData().then(refresh).then(() => setReady(true)).catch((error) => notify(error.message, true));
+    ensureEmptyWorkspace().then(refresh).then(() => setReady(true)).catch((error) => notify(error.message, true));
   }, [notify, refresh]);
 
   const activeNav = navItems.find((item) => item.id === section)!;
@@ -104,11 +104,12 @@ export function RestaurantFlowApp() {
   }, 0);
 
   const reset = async () => {
-    if (!window.confirm("سيتم حذف التغييرات المحلية وإعادة البيانات التجريبية. هل تريد المتابعة؟")) return;
-    await resetDemoData();
+    if (!window.confirm("سيتم حذف جميع بيانات المطعم نهائيًا والبدء من الصفر. هل تريد المتابعة؟")) return;
+    await resetAllData();
     await refresh();
     setCart([]);
-    notify("تمت استعادة البيانات التجريبية");
+    setSection("units");
+    notify("تم مسح البيانات. ابدأ الآن بإضافة وحدات القياس");
   };
 
   const exportBackup = async () => {
@@ -154,16 +155,16 @@ export function RestaurantFlowApp() {
         </nav>
         <div className="user-card">
           <div className="avatar">م</div>
-          <div><strong>محمود السيد</strong><small>مالك النظام</small></div>
+          <div><strong>مدير النظام</strong><small>الحساب المحلي</small></div>
         </div>
       </aside>
 
       <main className="main">
         <header className="topbar">
-          <div className="branch"><span className="branch-dot" /><div><strong>فرع الزمالك</strong><small>متصل · البيانات محفوظة محليًا</small></div></div>
+          <div className="branch"><span className="branch-dot" /><div><strong>الفرع الرئيسي</strong><small>جاهز للإعداد · البيانات محفوظة محليًا</small></div></div>
           <div className="top-actions">
             <button className="chip" onClick={exportBackup}>↓ نسخة احتياطية</button>
-            <button className="chip" onClick={reset}>↻ بيانات تجريبية</button>
+            <button className="chip" onClick={reset}>⌫ مسح كل البيانات</button>
             <span className="chip shift-chip">● وردية مفتوحة</span>
             <button className="icon-btn" title="تبديل المظهر">☼</button>
           </div>
@@ -180,10 +181,11 @@ export function RestaurantFlowApp() {
             <div><p className="eyebrow">{activeNav.eyebrow}</p><h1>{activeNav.label}</h1><p className="page-sub">{sectionDescription(section)}</p></div>
             <div className="head-actions">
               {section === "units" && <button className="btn primary" onClick={() => setModal("unit")}>＋ وحدة جديدة</button>}
-              {section === "items" && <button className="btn primary" onClick={() => setModal("item")}>＋ مادة جديدة</button>}
+              {section === "items" && <button className="btn primary" onClick={() => data.units.length ? setModal("item") : notify("أضف وحدة قياس واحدة على الأقل أولًا", true)}>＋ مادة جديدة</button>}
               {section === "warehouses" && <button className="btn primary" onClick={() => setModal("warehouse")}>＋ مخزن جديد</button>}
-              {section === "recipes" && <button className="btn primary" onClick={() => setModal("recipe")}>＋ وصفة جديدة</button>}
-              {section === "production" && <button className="btn primary" onClick={() => setModal("production")}>⚙ أمر تصنيع</button>}
+              {section === "recipes" && <button className="btn primary" onClick={() => data.items.length && data.units.length ? setModal("recipe") : notify("أضف الوحدات والمواد قبل إنشاء الوصفة", true)}>＋ وصفة جديدة</button>}
+              {section === "production" && <button className="btn primary" onClick={() => data.recipes.length && data.warehouses.length ? setModal("production") : notify("أنشئ وصفة ومخزنًا واحدًا على الأقل قبل التصنيع", true)}>⚙ أمر تصنيع</button>}
+              {section === "movements" && <button className="btn primary" onClick={() => data.items.length && data.warehouses.length ? setModal("movement") : notify("أضف مادة ومخزنًا قبل إدخال الرصيد", true)}>＋ رصيد افتتاحي</button>}
             </div>
           </div>
 
@@ -206,6 +208,7 @@ export function RestaurantFlowApp() {
         {modal === "warehouse" && <WarehouseForm onDone={async () => { setModal(null); await refresh(); notify("تمت إضافة المخزن بنجاح"); }} />}
         {modal === "recipe" && <RecipeForm data={data} onDone={async () => { setModal(null); await refresh(); notify("تم إنشاء الوصفة وحساب تكلفتها"); }} />}
         {modal === "production" && <ProductionForm data={data} onDone={async (order) => { setModal(null); await refresh(); notify(`تم تنفيذ ${order.number} بتكلفة ${formatMoney(order.totalCostPiasters)}`); }} />}
+        {modal === "movement" && <MovementForm data={data} onDone={async () => { setModal(null); await refresh(); notify("تمت إضافة الرصيد وتسجيل الحركة"); }} />}
       </Modal>}
       {toast && <div className={`toast ${toast.error ? "error" : ""}`}>{toast.error ? "⚠ " : "✓ "}{toast.text}</div>}
     </div>
@@ -227,12 +230,12 @@ function sectionDescription(section: Section) {
 }
 
 const guideContent: Record<Section, { number: string; title: string; text: string; bullets: string[]; action: string; next?: Section; modal?: Exclude<ModalName, null> }> = {
-  units: { number: "الخطوة 1", title: "ابدأ بتعريف وحدات القياس", text: "الوحدة هي اللغة التي سيفهم بها النظام كمياتك. البيانات التجريبية جاهزة، ويمكنك إضافة وحدتك الخاصة.", bullets: ["راجع الجرام والكيلوجرام", "تأكد من معامل التحويل", "أضف أي وحدة تستخدمها"], action: "أضف وحدة قياس", modal: "unit" },
+  units: { number: "الخطوة 1", title: "ابدأ بتعريف وحدات القياس", text: "النظام فارغ وجاهز لك. أضف الوحدات التي يستخدمها مطعمك مثل الجرام والكيلوجرام والقطعة.", bullets: ["أضف أصغر وحدة أولًا", "حدد معامل التحويل بدقة", "أضف كل وحدة تستخدمها"], action: "أضف أول وحدة", modal: "unit" },
   items: { number: "الخطوة 2", title: "سجّل كل ما تشتريه أو تبيعه", text: "أضف الدقيق والجبن وباقي الخامات، ثم التجهيزات والمنتجات التي ستظهر في الكاشير.", bullets: ["اختر مرحلة المادة", "حدد وحدة القياس", "أدخل التكلفة والحد الأدنى"], action: "أضف مادة جديدة", modal: "item" },
   warehouses: { number: "الخطوة 3", title: "وزّع المواد على المخازن", text: "كل مرحلة لها مخزن مستقل: خام، تحت التشغيل، ومنتج تام. الأرصدة تتغير بالحركات فقط.", bullets: ["راجع المخازن الثلاثة", "تابع قيمة المخزون", "لا تعدّل الرصيد يدويًا"], action: "انتقل إلى الوصفات", next: "recipes" },
   recipes: { number: "الخطوة 4", title: "اربط المنتج بمكوناته", text: "الوصفة تخبر النظام بالضبط ما الذي يجب خصمه عند التصنيع أو البيع.", bullets: ["اختر المنتج الناتج", "أدخل كل مكوّن وكميته", "راجع التكلفة المحسوبة"], action: "أنشئ وصفة", modal: "recipe" },
   production: { number: "الخطوة 5", title: "حوّل الخامات إلى إنتاج فعلي", text: "اختر الوصفة وعدد الدفعات. سيتحقق النظام من الرصيد ثم يخصم المدخلات ويضيف الناتج تلقائيًا.", bullets: ["اختر الوصفة", "حدد الكمية الفعلية", "نفّذ أمر التصنيع"], action: "نفّذ أمر تصنيع", modal: "production" },
-  movements: { number: "الخطوة 6", title: "راجع ما حدث في المخزون", text: "هذه الشاشة سجل تدقيق للقراءة فقط؛ ستجد فيها كل إضافة وخصم وسبب العملية.", bullets: ["طابق رقم المرجع", "راجع الكمية والقيمة", "اكتشف أي حركة غير متوقعة"], action: "راجع التكلفة", next: "costing" },
+  movements: { number: "الخطوة 6", title: "أدخل الرصيد ثم راجع الحركات", text: "استخدم الرصيد الافتتاحي عند بداية العمل، وبعدها ستظهر هنا كل إضافة وخصم وسبب العملية.", bullets: ["اختر المخزن والمادة", "أدخل الكمية وتكلفة الوحدة", "راجع الحركة بعد الحفظ"], action: "أضف رصيدًا افتتاحيًا", modal: "movement" },
   costing: { number: "الخطوة 7", title: "تأكد أن سعر البيع مربح", text: "قارن تكلفة كل منتج بسعر بيعه. اللون الأخضر يعني أن هامش الربح مريح.", bullets: ["راجع تكلفة الوحدة", "قارنها بسعر البيع", "عدّل الوصفة عند انخفاض الهامش"], action: "افتح الكاشير", next: "pos" },
   pos: { number: "الخطوة 8", title: "أنشئ الطلب وحصّل الحساب", text: "اضغط المنتج لإضافته، اختر وسيلة الدفع، ثم اضغط تحصيل. المكونات ستُخصم تلقائيًا.", bullets: ["أضف المنتجات للطلب", "راجع الإجمالي", "اختر الدفع ثم حصّل"], action: "ابدأ بإضافة منتج", next: "pos" },
 };
@@ -268,15 +271,15 @@ function UnitsView({ data, query, setQuery, notify, refresh }: { data: AppData; 
       <Stat label="إجمالي الوحدات" value={String(data.units.length)} hint="وحدات نشطة" icon="⌁" />
       <Stat label="وحدات الوزن" value={String(data.units.filter((x) => x.family === "mass").length)} hint="جرام وكيلوجرام" icon="㎏" />
       <Stat label="وحدات الحجم" value={String(data.units.filter((x) => x.family === "volume").length)} hint="ملليلتر ولتر" icon="ℓ" />
-      <Stat label="التحويلات" value="2" hint="تحويلات أساسية مفعلة" icon="⇄" />
+      <Stat label="التحويلات" value={String(data.units.filter((x) => x.baseFactor !== 1).length)} hint="تحويلات مسجلة" icon="⇄" />
     </div>
     <div className="panel">
       <div className="panel-head"><div><h2>وحدات القياس</h2><small>معامل الوحدة محسوب مقابل أصغر وحدة في العائلة</small></div><span className="badge green"><span className="dot" /> محفوظ محليًا</span></div>
       <div className="panel-body">
         <SearchBar value={query} onChange={setQuery} />
-        <div className="table-wrap"><table><thead><tr><th>الوحدة</th><th>الكود</th><th>الرمز</th><th>العائلة</th><th>المعامل الأساسي</th><th>الحالة</th><th /></tr></thead>
+        {units.length ? <div className="table-wrap"><table><thead><tr><th>الوحدة</th><th>الكود</th><th>الرمز</th><th>العائلة</th><th>المعامل الأساسي</th><th>الحالة</th><th /></tr></thead>
           <tbody>{units.map((unit) => <tr key={unit.id}><td className="item-name"><strong>{unit.nameAr}</strong><small>{unit.nameEn}</small></td><td>{unit.code}</td><td>{unit.symbol}</td><td>{unit.family === "mass" ? "وزن" : unit.family === "volume" ? "حجم" : "عدد"}</td><td>{formatQuantity(unit.baseFactor)}</td><td><span className="badge green"><span className="dot" /> نشطة</span></td><td><button className="btn small danger" onClick={() => deactivate(unit)}>حذف</button></td></tr>)}</tbody>
-        </table></div>
+        </table></div> : <Empty icon="1" title="ابدأ بأول وحدة قياس" text="اضغط «أضف أول وحدة» وأدخل مثلًا: جرام، الرمز جم، والمعامل 1." />}
       </div>
     </div>
   </>;
@@ -300,13 +303,13 @@ function ItemsView({ items, balances, units, query, setQuery, refresh, notify }:
     </div>
     <div className="panel"><div className="panel-head"><div><h2>دليل المواد</h2><small>الأرصدة لا تُعدّل مباشرة؛ تتغير فقط من خلال الحركات</small></div><span className="badge">{items.length} صنف</span></div>
       <div className="panel-body"><SearchBar value={query} onChange={setQuery} />
-        <div className="table-wrap"><table><thead><tr><th>المادة</th><th>المرحلة</th><th>التصنيف</th><th>الرصيد</th><th>متوسط التكلفة</th><th>الحد الأدنى</th><th /></tr></thead>
+        {items.length ? <div className="table-wrap"><table><thead><tr><th>المادة</th><th>المرحلة</th><th>التصنيف</th><th>الرصيد</th><th>متوسط التكلفة</th><th>الحد الأدنى</th><th /></tr></thead>
           <tbody>{items.map((item) => {
             const balance = balances.filter((x) => x.itemId === item.id).reduce((sum, x) => sum + x.quantity, 0);
             const unit = units.find((x) => x.id === item.baseUnitId)?.symbol;
             return <tr key={item.id}><td className="item-name"><strong>{item.nameAr}</strong><small>{item.code} · {item.nameEn}</small></td><td><span className={`badge ${item.stage === "raw" ? "green" : item.stage === "work_in_progress" ? "amber" : "blue"}`}>{stageLabels[item.stage]}</span></td><td>{item.category}</td><td>{formatQuantity(balance)} {unit}</td><td>{formatMoney(item.averageCostPiasters)} / {unit}</td><td>{formatQuantity(item.minLevel)} {unit}</td><td><button className="btn small danger" onClick={() => deactivate(item)}>{item.active ? "تعطيل" : "معطلة"}</button></td></tr>;
           })}</tbody>
-        </table></div>
+        </table></div> : <Empty icon="2" title="لا توجد مواد بعد" text="بعد إضافة وحدات القياس، أضف أول مادة خام يستخدمها مطعمك." />}
       </div>
     </div>
   </>;
@@ -315,12 +318,12 @@ function ItemsView({ items, balances, units, query, setQuery, refresh, notify }:
 function WarehousesView({ data }: { data: AppData }) {
   return <>
     <div className="stats">
-      <Stat label="إجمالي المخازن" value={String(data.warehouses.length)} hint="في فرع الزمالك" icon="▦" />
+      <Stat label="إجمالي المخازن" value={String(data.warehouses.length)} hint="في الفرع الرئيسي" icon="▦" />
       <Stat label="قيمة المواد الخام" value={formatMoney(data.balances.filter((b) => b.warehouseId === "wh-raw").reduce((s, b) => s + b.quantity * b.averageCostPiasters, 0))} hint="بالقيمة الدفترية" icon="ج" />
       <Stat label="الأرصدة المحجوزة" value={formatQuantity(data.balances.reduce((s, b) => s + b.reserved, 0))} hint="حاليًا" icon="◉" />
       <Stat label="أصناف نشطة" value={String(data.items.filter((x) => x.active).length)} hint="عبر كل المخازن" icon="◇" />
     </div>
-    <div className="cards">{data.warehouses.map((warehouse) => {
+    {data.warehouses.length ? <div className="cards">{data.warehouses.map((warehouse) => {
       const balances = data.balances.filter((x) => x.warehouseId === warehouse.id);
       const value = balances.reduce((s, b) => s + b.quantity * b.averageCostPiasters, 0);
       return <div className="entity-card" key={warehouse.id}><div className="entity-card-top"><div><h3>{warehouse.nameAr}</h3><p>{warehouse.nameEn} · {warehouse.code}</p></div><span className="badge green"><span className="dot" /> نشط</span></div>
@@ -328,11 +331,12 @@ function WarehousesView({ data }: { data: AppData }) {
         <div className="progress"><div style={{ width: `${Math.min(100, 20 + balances.length * 15)}%` }} /></div>
         <p>قيمة المخزون: <strong>{formatMoney(value)}</strong></p>
       </div>;
-    })}</div>
+    })}</div> : <div className="panel"><Empty icon="3" title="أنشئ أول مخزن" text="ابدأ بمخزن المواد الخام، ثم أضف مخزن تحت التشغيل والمنتج التام عند الحاجة." /></div>}
   </>;
 }
 
 function RecipesView({ data, recipeCost }: { data: AppData; recipeCost: (r: Recipe) => number }) {
+  if (!data.recipes.length) return <div className="panel"><Empty icon="4" title="لا توجد وصفات" text="أضف المواد أولًا، ثم أنشئ وصفة تربط المنتج الناتج بمكوناته وكمياتها." /></div>;
   return <div className="cards">{data.recipes.map((recipe) => {
     const cost = recipeCost(recipe);
     const margin = recipe.sellingPricePiasters ? Math.round((1 - cost / recipe.sellingPricePiasters) * 100) : null;
@@ -414,9 +418,9 @@ function PosView({ data, cart, setCart, payment, setPayment, refresh, notify }: 
   };
   return <div className="pos-layout">
     <div><div className="toolbar"><div className="search"><input placeholder="ابحث عن منتج أو امسح الباركود…" /></div><button className="filter">كل الأقسام</button></div>
-      <div className="product-grid">{products.map((product, index) => <button className="product" key={product.id} onClick={() => add(product)}>
+      {products.length ? <div className="product-grid">{products.map((product, index) => <button className="product" key={product.id} onClick={() => add(product)}>
         <span className="product-visual">{["🍕", "🍝", "☕", "🥪"][index % 4]}</span><strong>{product.nameAr}</strong><small className="page-sub">{product.category}</small><span>{formatMoney(product.salePricePiasters ?? 0)}</span>
-      </button>)}</div>
+      </button>)}</div> : <div className="panel"><Empty icon="8" title="الكاشير ينتظر منتجاتك" text="أضف منتجًا تامًا بسعر بيع، ثم أنشئ وصفته ليظهر هنا." /></div>}
     </div>
     <div className="panel cart"><div className="panel-head"><div><h2>الطلب الحالي</h2><small>تيك أواي · طلب جديد</small></div><span className="badge green">{cart.reduce((s, x) => s + x.quantity, 0)} أصناف</span></div>
       {cart.length ? <div className="cart-list">{cart.map((line) => <div className="cart-row" key={line.id}><div><strong>{line.name}</strong><small>{formatMoney(line.unitPricePiasters)} × {line.quantity}</small><div className="qty"><button onClick={() => changeQty(line.id, -1)}>−</button><b>{line.quantity}</b><button onClick={() => changeQty(line.id, 1)}>＋</button></div></div><strong>{formatMoney(line.unitPricePiasters * line.quantity)}</strong></div>)}</div> : <Empty icon="▤" title="الطلب فارغ" text="اضغط على أي منتج لإضافته." />}
@@ -450,7 +454,7 @@ function UnitForm({ onDone }: { onDone: () => void }) {
     e.preventDefault(); const form = new FormData(e.currentTarget);
     try {
       const now = new Date().toISOString();
-      await db.units.add({ id: crypto.randomUUID(), code: String(form.get("code")).toUpperCase(), nameAr: String(form.get("nameAr")), nameEn: String(form.get("nameEn")), symbol: String(form.get("symbol")), family: form.get("family") as UnitOfMeasure["family"], baseFactor: Number(form.get("factor")), active: true, createdAt: now, updatedAt: now, createdBy: "demo-owner" });
+      await db.units.add({ id: crypto.randomUUID(), code: String(form.get("code")).toUpperCase(), nameAr: String(form.get("nameAr")), nameEn: String(form.get("nameEn")), symbol: String(form.get("symbol")), family: form.get("family") as UnitOfMeasure["family"], baseFactor: Number(form.get("factor")), active: true, createdAt: now, updatedAt: now, createdBy: "local-user" });
       onDone();
     } catch { setError("تحقق من البيانات؛ قد يكون الكود مستخدمًا بالفعل."); }
   };
@@ -463,7 +467,7 @@ function ItemForm({ data, onDone }: { data: AppData; onDone: () => void }) {
     e.preventDefault(); const form = new FormData(e.currentTarget);
     try {
       const now = new Date().toISOString();
-      await db.items.add({ id: crypto.randomUUID(), code: String(form.get("code")).toUpperCase(), nameAr: String(form.get("nameAr")), nameEn: String(form.get("nameEn")), category: String(form.get("category")), stage: form.get("stage") as InventoryItem["stage"], baseUnitId: String(form.get("unit")), purchaseUnitId: String(form.get("unit")), purchaseFactor: 1, minLevel: Number(form.get("minLevel")), averageCostPiasters: Math.round(Number(form.get("cost")) * 100), salePricePiasters: form.get("price") ? Math.round(Number(form.get("price")) * 100) : undefined, active: true, createdAt: now, updatedAt: now, createdBy: "demo-owner" });
+      await db.items.add({ id: crypto.randomUUID(), code: String(form.get("code")).toUpperCase(), nameAr: String(form.get("nameAr")), nameEn: String(form.get("nameEn")), category: String(form.get("category")), stage: form.get("stage") as InventoryItem["stage"], baseUnitId: String(form.get("unit")), purchaseUnitId: String(form.get("unit")), purchaseFactor: 1, minLevel: Number(form.get("minLevel")), averageCostPiasters: Math.round(Number(form.get("cost")) * 100), salePricePiasters: form.get("price") ? Math.round(Number(form.get("price")) * 100) : undefined, active: true, createdAt: now, updatedAt: now, createdBy: "local-user" });
       onDone();
     } catch { setError("تعذر حفظ المادة. تأكد من الكود والقيم المطلوبة."); }
   };
@@ -474,7 +478,7 @@ function WarehouseForm({ onDone }: { onDone: () => void }) {
   const [error, setError] = useState("");
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault(); const form = new FormData(e.currentTarget); const now = new Date().toISOString();
-    try { await db.warehouses.add({ id: crypto.randomUUID(), code: String(form.get("code")).toUpperCase(), nameAr: String(form.get("nameAr")), nameEn: String(form.get("nameEn")), stage: form.get("stage") as Warehouse["stage"], branchName: "فرع الزمالك", active: true, createdAt: now, updatedAt: now, createdBy: "demo-owner" }); onDone(); }
+    try { await db.warehouses.add({ id: crypto.randomUUID(), code: String(form.get("code")).toUpperCase(), nameAr: String(form.get("nameAr")), nameEn: String(form.get("nameEn")), stage: form.get("stage") as Warehouse["stage"], branchName: "الفرع الرئيسي", active: true, createdAt: now, updatedAt: now, createdBy: "local-user" }); onDone(); }
     catch { setError("تعذر إضافة المخزن. راجع الكود والبيانات."); }
   };
   return <FormShell error={error} onSubmit={submit}><Field label="اسم المخزن بالعربية"><input name="nameAr" required /></Field><Field label="الاسم بالإنجليزية"><input name="nameEn" required /></Field><Field label="الكود"><input name="code" required placeholder="WH-04" /></Field><Field label="نوع المخزون"><select name="stage"><option value="raw">مواد خام</option><option value="work_in_progress">تحت التشغيل</option><option value="finished">منتج تام</option></select></Field></FormShell>;
@@ -482,13 +486,13 @@ function WarehouseForm({ onDone }: { onDone: () => void }) {
 
 function RecipeForm({ data, onDone }: { data: AppData; onDone: () => void }) {
   const [error, setError] = useState("");
-  const ingredients = data.items.filter((x) => x.stage !== "finished").slice(0, 3);
+  const ingredients = data.items.filter((x) => x.stage !== "finished");
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault(); const form = new FormData(e.currentTarget); const now = new Date().toISOString();
     const selected = ingredients.map((item, index) => ({ item, quantity: Number(form.get(`qty-${index}`)) })).filter((x) => x.quantity > 0);
     if (!selected.length) return setError("أدخل كمية مكوّن واحد على الأقل.");
     try {
-      await db.recipes.add({ id: crypto.randomUUID(), code: String(form.get("code")).toUpperCase(), nameAr: String(form.get("nameAr")), outputItemId: String(form.get("outputItem")), outputQuantity: Number(form.get("outputQuantity")), outputUnitId: String(form.get("outputUnit")), sellingPricePiasters: form.get("price") ? Math.round(Number(form.get("price")) * 100) : undefined, version: 1, active: true, ingredients: selected.map(({ item, quantity }) => ({ id: crypto.randomUUID(), itemId: item.id, quantity, unitId: item.baseUnitId, wastePercent: 0, optional: false })), createdAt: now, updatedAt: now, createdBy: "demo-owner" });
+      await db.recipes.add({ id: crypto.randomUUID(), code: String(form.get("code")).toUpperCase(), nameAr: String(form.get("nameAr")), outputItemId: String(form.get("outputItem")), outputQuantity: Number(form.get("outputQuantity")), outputUnitId: String(form.get("outputUnit")), sellingPricePiasters: form.get("price") ? Math.round(Number(form.get("price")) * 100) : undefined, version: 1, active: true, ingredients: selected.map(({ item, quantity }) => ({ id: crypto.randomUUID(), itemId: item.id, quantity, unitId: item.baseUnitId, wastePercent: 0, optional: false })), createdAt: now, updatedAt: now, createdBy: "local-user" });
       onDone();
     } catch { setError("تعذر إنشاء الوصفة. تأكد من كل الحقول."); }
   };
@@ -509,6 +513,33 @@ function ProductionForm({ data, onDone }: { data: AppData; onDone: (order: Produ
   return <FormShell error={error} onSubmit={submit}><Field label="الوصفة" full><select name="recipe" value={recipeId} onChange={(e) => setRecipeId(e.target.value)}>{data.recipes.map((x) => <option key={x.id} value={x.id}>{x.nameAr}</option>)}</select></Field><Field label="عدد الدفعات"><input name="batches" type="number" min="1" step="1" defaultValue="1" /></Field><Field label="الكمية الفعلية (اتركها للمخطط)"><input name="actual" type="number" min=".001" step=".001" placeholder={String(recipe?.outputQuantity ?? 0)} /></Field><Field label="مخزن الصرف"><select name="source">{data.warehouses.map((x) => <option key={x.id} value={x.id}>{x.nameAr}</option>)}</select></Field><Field label="مخزن الناتج"><select name="target" defaultValue={recipe && data.items.find((x) => x.id === recipe.outputItemId)?.stage === "finished" ? "wh-fg" : "wh-wip"}>{data.warehouses.map((x) => <option key={x.id} value={x.id}>{x.nameAr}</option>)}</select></Field><Field label="التكلفة التقديرية للدفعة" full><div className="stat"><strong>{formatMoney(cost)}</strong><small>تتحدث آليًا حسب متوسط تكلفة المكونات</small></div></Field></FormShell>;
 }
 
+function MovementForm({ data, onDone }: { data: AppData; onDone: () => void }) {
+  const [error, setError] = useState("");
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    try {
+      await addOpeningStock({
+        warehouseId: String(form.get("warehouse")),
+        itemId: String(form.get("item")),
+        quantity: Number(form.get("quantity")),
+        unitCostPiasters: Math.round(Number(form.get("cost")) * 100),
+        note: String(form.get("note") ?? ""),
+      });
+      onDone();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "تعذر إضافة الرصيد");
+    }
+  };
+  return <FormShell error={error} onSubmit={submit}>
+    <Field label="المخزن"><select name="warehouse" required>{data.warehouses.map((x) => <option key={x.id} value={x.id}>{x.nameAr}</option>)}</select></Field>
+    <Field label="المادة"><select name="item" required>{data.items.map((x) => <option key={x.id} value={x.id}>{x.nameAr}</option>)}</select></Field>
+    <Field label="الكمية"><input name="quantity" type="number" min="0.001" step="0.001" required /></Field>
+    <Field label="تكلفة الوحدة بالجنيه"><input name="cost" type="number" min="0" step="0.01" required /></Field>
+    <Field label="ملاحظة (اختياري)" full><input name="note" placeholder="مثال: رصيد بداية التشغيل" /></Field>
+  </FormShell>;
+}
+
 function modalTitle(modal: Exclude<ModalName, null>) {
-  return { unit: "إضافة وحدة قياس", item: "إضافة مادة جديدة", warehouse: "إنشاء مخزن", recipe: "إنشاء وصفة ديناميكية", production: "تنفيذ أمر تصنيع" }[modal];
+  return { unit: "إضافة وحدة قياس", item: "إضافة مادة جديدة", warehouse: "إنشاء مخزن", recipe: "إنشاء وصفة ديناميكية", production: "تنفيذ أمر تصنيع", movement: "إضافة رصيد افتتاحي" }[modal];
 }

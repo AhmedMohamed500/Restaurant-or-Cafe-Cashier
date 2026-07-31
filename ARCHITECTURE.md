@@ -9,7 +9,7 @@ app/
 src/
   db/
     database.ts          مخطط Dexie وIndexedDB
-    seed.ts              البيانات التجريبية والتهيئة
+    seed.ts              تهيئة مساحة العمل الفارغة وإعادة الضبط
   domain/
     models.ts            نماذج النطاق
     inventory-service.ts معاملات المخزون والتصنيع والبيع

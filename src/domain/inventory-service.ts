@@ -37,6 +37,37 @@ export async function calculateRecipeCost(recipeId: string, multiplier = 1) {
   return total;
 }
 
+export async function addOpeningStock(input: {
+  warehouseId: string;
+  itemId: string;
+  quantity: number;
+  unitCostPiasters: number;
+  note?: string;
+}) {
+  return db.transaction("rw", [db.items, db.balances, db.movements], async () => {
+    if (input.quantity <= 0) throw new Error("الكمية يجب أن تكون أكبر من صفر");
+    if (input.unitCostPiasters < 0) throw new Error("التكلفة لا يمكن أن تكون سالبة");
+    const item = await db.items.get(input.itemId);
+    if (!item) throw new Error("المادة غير موجودة");
+    const balance = await getBalance(input.warehouseId, input.itemId);
+    const oldValue = multiplyMoney(balance.averageCostPiasters, balance.quantity);
+    const addedValue = multiplyMoney(input.unitCostPiasters, input.quantity);
+    const newQuantity = roundQuantity(balance.quantity + input.quantity);
+    const averageCostPiasters = newQuantity ? Math.round((oldValue + addedValue) / newQuantity) : input.unitCostPiasters;
+    const timestamp = now();
+    await db.balances.put({ ...balance, quantity: newQuantity, averageCostPiasters, updatedAt: timestamp });
+    await db.items.update(item.id, { averageCostPiasters, updatedAt: timestamp });
+    const movement: StockMovement = {
+      id: uid(), warehouseId: input.warehouseId, itemId: input.itemId, type: "opening",
+      quantity: input.quantity, unitCostPiasters: input.unitCostPiasters,
+      totalCostPiasters: addedValue, reference: `OPEN-${Date.now().toString().slice(-6)}`,
+      note: input.note, createdAt: timestamp, updatedAt: timestamp, createdBy: "local-user",
+    };
+    await db.movements.put(movement);
+    return movement;
+  });
+}
+
 export async function executeProduction(input: {
   recipeId: string;
   batches: number;
@@ -72,7 +103,7 @@ export async function executeProduction(input: {
       movements.push({
         id: uid(), warehouseId: input.sourceWarehouseId, itemId: req.ingredient.itemId,
         type: "production_consume", quantity: -req.required, unitCostPiasters: cost,
-        totalCostPiasters: -multiplyMoney(cost, req.required), reference, createdAt: now(), updatedAt: now(), createdBy: "demo-owner",
+        totalCostPiasters: -multiplyMoney(cost, req.required), reference, createdAt: now(), updatedAt: now(), createdBy: "local-user",
       });
     }
 
@@ -92,7 +123,7 @@ export async function executeProduction(input: {
     movements.push({
       id: uid(), warehouseId: input.targetWarehouseId, itemId: recipe.outputItemId,
       type: "production_output", quantity: actualQuantity, unitCostPiasters: unitCost,
-      totalCostPiasters: totalCost, reference, createdAt: now(), updatedAt: now(), createdBy: "demo-owner",
+      totalCostPiasters: totalCost, reference, createdAt: now(), updatedAt: now(), createdBy: "local-user",
     });
     await db.movements.bulkPut(movements);
 
@@ -102,7 +133,7 @@ export async function executeProduction(input: {
       actualQuantity, sourceWarehouseId: input.sourceWarehouseId, targetWarehouseId: input.targetWarehouseId,
       status: "completed", totalCostPiasters: totalCost, unitCostPiasters: unitCost,
       wasteQuantity: Math.max(0, planned - actualQuantity),
-      createdAt: now(), updatedAt: now(), createdBy: "demo-owner",
+      createdAt: now(), updatedAt: now(), createdBy: "local-user",
     };
     await db.productionOrders.put(order);
     return order;
@@ -131,14 +162,14 @@ export async function completeSale(order: Omit<SaleOrder, "id" | "number" | "sta
         movements.push({
           id: uid(), warehouseId, itemId: item.id, type: "sale", quantity: -required,
           unitCostPiasters: item.averageCostPiasters, totalCostPiasters: -multiplyMoney(item.averageCostPiasters, required),
-          reference, createdAt: now(), updatedAt: now(), createdBy: "demo-cashier",
+          reference, createdAt: now(), updatedAt: now(), createdBy: "local-cashier",
         });
       }
     }
     await db.movements.bulkPut(movements);
     const sale: SaleOrder = {
       ...order, id: saleId, number: reference, status: "paid",
-      createdAt: now(), updatedAt: now(), createdBy: "demo-cashier",
+      createdAt: now(), updatedAt: now(), createdBy: "local-cashier",
     };
     await db.saleOrders.put(sale);
     return sale;
