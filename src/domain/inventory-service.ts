@@ -141,7 +141,7 @@ export async function executeProduction(input: {
 }
 
 export async function completeSale(order: Omit<SaleOrder, "id" | "number" | "status" | "createdAt" | "updatedAt" | "createdBy">) {
-  return db.transaction("rw", [db.settings, db.saleOrders, db.items, db.recipes, db.balances, db.movements], async () => {
+  return db.transaction("rw", [db.settings, db.saleOrders, db.items, db.warehouses, db.recipes, db.balances, db.movements], async () => {
     const settings = await db.settings.get("settings");
     if (!settings?.activeShift) throw new Error("يجب فتح وردية قبل تسجيل المبيعات");
     const saleId = uid();
@@ -154,7 +154,9 @@ export async function completeSale(order: Omit<SaleOrder, "id" | "number" | "sta
       for (const ingredient of recipe.ingredients.filter((x) => !x.optional)) {
         const item = await db.items.get(ingredient.itemId);
         if (!item) continue;
-        const warehouseId = item.stage === "raw" ? "wh-raw" : item.stage === "work_in_progress" ? "wh-wip" : "wh-fg";
+        const warehouse = await db.warehouses.where("stage").equals(item.stage).filter((entry) => entry.active).first();
+        if (!warehouse) throw new Error(`لا يوجد مخزن نشط مناسب للصنف: ${item.nameAr}`);
+        const warehouseId = warehouse.id;
         const balance = await getBalance(warehouseId, ingredient.itemId);
         const required = roundQuantity(ingredient.quantity * line.quantity);
         if (balance.quantity - balance.reserved < required) throw new Error(`الرصيد غير كافٍ لإتمام الطلب: ${item.nameAr}`);

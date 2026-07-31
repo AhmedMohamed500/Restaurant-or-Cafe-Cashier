@@ -10,6 +10,7 @@ import type {
   OrderItem,
   ProductionOrder,
   Recipe,
+  SaleOrder,
   StockBalance,
   StockMovement,
   UnitOfMeasure,
@@ -58,6 +59,7 @@ interface AppData {
 }
 
 const emptyData: AppData = { units: [], items: [], warehouses: [], balances: [], recipes: [], movements: [], productionOrders: [] };
+const RESTAURANT_NAME = "RestaurantFlow";
 
 async function optimizeItemImage(file: File) {
   if (!file.type.startsWith("image/")) throw new Error("اختر ملف صورة صالحًا");
@@ -222,7 +224,7 @@ export function RestaurantFlowApp() {
             </div>
           </div>
 
-          <ActionGuide section={section} setSection={setSection} setModal={setModal} />
+          <ActionGuide section={section} />
 
           {section === "units" && <UnitsView data={data} query={query} setQuery={setQuery} notify={notify} refresh={refresh} />}
           {section === "items" && <ItemsView items={filteredItems} balances={data.balances} units={data.units} query={query} setQuery={setQuery} refresh={refresh} notify={notify} />}
@@ -273,14 +275,12 @@ const guideContent: Record<Section, { number: string; title: string; text: strin
   pos: { number: "الخطوة 8", title: "أنشئ الطلب وحصّل الحساب", text: "اضغط المنتج لإضافته، اختر وسيلة الدفع، ثم اضغط تحصيل. المكونات ستُخصم تلقائيًا.", bullets: ["أضف المنتجات للطلب", "راجع الإجمالي", "اختر الدفع ثم حصّل"], action: "ابدأ بإضافة منتج", next: "pos" },
 };
 
-function ActionGuide({ section, setSection, setModal }: { section: Section; setSection: (section: Section) => void; setModal: (modal: ModalName) => void }) {
+function ActionGuide({ section }: { section: Section }) {
   const guide = guideContent[section];
-  const act = () => guide.modal ? setModal(guide.modal) : guide.next && setSection(guide.next);
   return <section className="guide" aria-label="ماذا أفعل الآن؟">
     <div className="guide-number">{guide.number}</div>
     <div className="guide-copy"><span>ماذا أفعل الآن؟</span><h2>{guide.title}</h2><p>{guide.text}</p></div>
     <div className="guide-checks">{guide.bullets.map((bullet) => <div key={bullet}><b>✓</b>{bullet}</div>)}</div>
-    <button className="btn primary guide-action" onClick={act}>{guide.action} ←</button>
   </section>;
 }
 
@@ -359,9 +359,19 @@ function WarehousesView({ data }: { data: AppData }) {
     {data.warehouses.length ? <div className="cards">{data.warehouses.map((warehouse) => {
       const balances = data.balances.filter((x) => x.warehouseId === warehouse.id);
       const value = balances.reduce((s, b) => s + b.quantity * b.averageCostPiasters, 0);
+      const warehouseItems = data.items.filter((item) => item.active && item.stage === warehouse.stage);
       return <div className="entity-card" key={warehouse.id}><div className="entity-card-top"><div><h3>{warehouse.nameAr}</h3><p>{warehouse.nameEn} · {warehouse.code}</p></div><span className="badge green"><span className="dot" /> نشط</span></div>
-        <div className="entity-meta"><span className="badge">{stageLabels[warehouse.stage]}</span><span className="badge">{balances.length} صنف</span></div>
-        <div className="progress"><div style={{ width: `${Math.min(100, 20 + balances.length * 15)}%` }} /></div>
+        <div className="entity-meta"><span className="badge">{stageLabels[warehouse.stage]}</span><span className="badge">{warehouseItems.length} صنف</span></div>
+        <div className="warehouse-items">{warehouseItems.length ? warehouseItems.map((item) => {
+          const balance = balances.find((entry) => entry.itemId === item.id);
+          const unit = data.units.find((entry) => entry.id === item.baseUnitId)?.symbol ?? "";
+          return <div className="warehouse-item" key={item.id}>
+            <ItemImage item={item} fallback={item.stage === "finished" ? "🍽️" : "🥬"} />
+            <div><strong>{item.nameAr}</strong><small>{item.code} · {item.category}</small></div>
+            <b>{formatQuantity(balance?.quantity ?? 0)} {unit}</b>
+          </div>;
+        }) : <p className="warehouse-empty">لا توجد أصناف من نوع {stageLabels[warehouse.stage]} بعد.</p>}</div>
+        <div className="progress"><div style={{ width: `${Math.min(100, 20 + warehouseItems.length * 15)}%` }} /></div>
         <p>قيمة المخزون: <strong>{formatMoney(value)}</strong></p>
       </div>;
     })}</div> : <div className="panel"><Empty icon="3" title="أنشئ أول مخزن" text="ابدأ بمخزن المواد الخام، ثم أضف مخزن تحت التشغيل والمنتج التام عند الحاجة." /></div>}
@@ -435,6 +445,7 @@ function CostingView({ data, recipeCost }: { data: AppData; recipeCost: (r: Reci
 }
 
 function PosView({ data, cart, setCart, payment, setPayment, refresh, notify }: { data: AppData; cart: OrderItem[]; setCart: React.Dispatch<React.SetStateAction<OrderItem[]>>; payment: "cash" | "card" | "wallet"; setPayment: (v: "cash" | "card" | "wallet") => void; refresh: () => Promise<void>; notify: (v: string, e?: boolean) => void }) {
+  const [receipt, setReceipt] = useState<SaleOrder | null>(null);
   const products = data.items.filter((x) => x.stage === "finished" && x.active && x.salePricePiasters);
   const add = (product: InventoryItem) => setCart((current) => {
     const exists = current.find((x) => x.itemId === product.id);
@@ -448,13 +459,13 @@ function PosView({ data, cart, setCart, payment, setPayment, refresh, notify }: 
     if (!cart.length) return;
     try {
       const sale = await completeSale({ type: "takeaway", items: cart, subtotalPiasters: subtotal, taxPiasters: tax, totalPiasters: subtotal + tax, paymentMethod: payment });
-      setCart([]); await refresh(); notify(`تم تحصيل الفاتورة ${sale.number} بنجاح`);
+      setReceipt(sale); setCart([]); await refresh(); notify(`تم تحصيل الفاتورة ${sale.number} بنجاح`);
     } catch (error) { notify(error instanceof Error ? error.message : "تعذر إتمام الطلب", true); }
   };
-  return <div className="pos-layout">
+  return <><div className="pos-layout">
     <div><div className="toolbar"><div className="search"><input placeholder="ابحث عن منتج أو امسح الباركود…" /></div><button className="filter">كل الأقسام</button></div>
       {products.length ? <div className="product-grid">{products.map((product, index) => <button className="product" key={product.id} onClick={() => add(product)}>
-        <span className="product-visual"><ItemImage item={product} fallback={["🍕", "🍝", "☕", "🥪"][index % 4]} large /></span><strong>{product.nameAr}</strong><small className="page-sub">{product.category}</small><span>{formatMoney(product.salePricePiasters ?? 0)}</span>
+        <div className="product-visual"><ItemImage item={product} fallback={["🍕", "🍝", "☕", "🥪"][index % 4]} large /></div><span className="product-category">{product.category}</span><strong>{product.nameAr}</strong><span className="product-price">{formatMoney(product.salePricePiasters ?? 0)}</span>
       </button>)}</div> : <div className="panel"><Empty icon="8" title="الكاشير ينتظر منتجاتك" text="أضف منتجًا تامًا بسعر بيع، ثم أنشئ وصفته ليظهر هنا." /></div>}
     </div>
     <div className="panel cart"><div className="panel-head"><div><h2>الطلب الحالي</h2><small>تيك أواي · طلب جديد</small></div><span className="badge green">{cart.reduce((s, x) => s + x.quantity, 0)} أصناف</span></div>
@@ -464,6 +475,22 @@ function PosView({ data, cart, setCart, payment, setPayment, refresh, notify }: 
         <button className="btn primary checkout" disabled={!cart.length} onClick={checkout}>تحصيل {formatMoney(subtotal + tax)}</button>
       </div>
     </div>
+  </div>{receipt && <ReceiptDialog sale={receipt} onClose={() => setReceipt(null)} />}</>;
+}
+
+function ReceiptDialog({ sale, onClose }: { sale: SaleOrder; onClose: () => void }) {
+  const totalQuantity = sale.items.reduce((sum, item) => sum + item.quantity, 0);
+  const paymentLabel = sale.paymentMethod === "cash" ? "نقدي" : sale.paymentMethod === "card" ? "بطاقة" : "محفظة إلكترونية";
+  return <div className="receipt-backdrop" role="dialog" aria-modal="true" aria-label={`إيصال ${sale.number}`}>
+    <article className="receipt-sheet">
+      <header className="receipt-header"><div className="receipt-logo">R</div><div><h2>{RESTAURANT_NAME}</h2><p>الفرع الرئيسي · إيصال بيع</p></div></header>
+      <div className="receipt-meta"><div><span>رقم الطلب</span><strong>{sale.number}</strong></div><div><span>التاريخ والوقت</span><strong>{new Date(sale.createdAt).toLocaleString("ar-EG", { dateStyle: "medium", timeStyle: "short" })}</strong></div><div><span>نوع الطلب</span><strong>تيك أواي</strong></div><div><span>طريقة الدفع</span><strong>{paymentLabel}</strong></div></div>
+      <table className="receipt-table"><thead><tr><th>الصنف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>{sale.items.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.quantity}</td><td>{formatMoney(item.unitPricePiasters)}</td><td>{formatMoney(item.unitPricePiasters * item.quantity)}</td></tr>)}</tbody></table>
+      <div className="receipt-counts"><span>عدد الأصناف: <strong>{sale.items.length}</strong></span><span>إجمالي الكميات: <strong>{totalQuantity}</strong></span></div>
+      <div className="receipt-totals"><div><span>الإجمالي الفرعي</span><strong>{formatMoney(sale.subtotalPiasters)}</strong></div><div><span>الضريبة 14%</span><strong>{formatMoney(sale.taxPiasters)}</strong></div><div className="receipt-grand"><span>الإجمالي</span><strong>{formatMoney(sale.totalPiasters)}</strong></div></div>
+      <p className="receipt-thanks">شكرًا لزيارتكم — نتمنى لكم وجبة سعيدة</p>
+      <div className="receipt-actions"><button className="btn" onClick={onClose}>طلب جديد</button><button className="btn primary" onClick={() => window.print()}>طباعة الإيصال</button></div>
+    </article>
   </div>;
 }
 
