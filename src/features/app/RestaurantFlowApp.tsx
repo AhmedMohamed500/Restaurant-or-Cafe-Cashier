@@ -187,6 +187,8 @@ export function RestaurantFlowApp() {
             </div>
           </div>
 
+          <ActionGuide section={section} setSection={setSection} setModal={setModal} />
+
           {section === "units" && <UnitsView data={data} query={query} setQuery={setQuery} notify={notify} refresh={refresh} />}
           {section === "items" && <ItemsView items={filteredItems} balances={data.balances} units={data.units} query={query} setQuery={setQuery} refresh={refresh} notify={notify} />}
           {section === "warehouses" && <WarehousesView data={data} />}
@@ -222,6 +224,28 @@ function sectionDescription(section: Section) {
     pos: "واجهة بيع سريعة للمس مع خصم مكونات الوصفة تلقائيًا.",
   };
   return descriptions[section];
+}
+
+const guideContent: Record<Section, { number: string; title: string; text: string; bullets: string[]; action: string; next?: Section; modal?: Exclude<ModalName, null> }> = {
+  units: { number: "الخطوة 1", title: "ابدأ بتعريف وحدات القياس", text: "الوحدة هي اللغة التي سيفهم بها النظام كمياتك. البيانات التجريبية جاهزة، ويمكنك إضافة وحدتك الخاصة.", bullets: ["راجع الجرام والكيلوجرام", "تأكد من معامل التحويل", "أضف أي وحدة تستخدمها"], action: "أضف وحدة قياس", modal: "unit" },
+  items: { number: "الخطوة 2", title: "سجّل كل ما تشتريه أو تبيعه", text: "أضف الدقيق والجبن وباقي الخامات، ثم التجهيزات والمنتجات التي ستظهر في الكاشير.", bullets: ["اختر مرحلة المادة", "حدد وحدة القياس", "أدخل التكلفة والحد الأدنى"], action: "أضف مادة جديدة", modal: "item" },
+  warehouses: { number: "الخطوة 3", title: "وزّع المواد على المخازن", text: "كل مرحلة لها مخزن مستقل: خام، تحت التشغيل، ومنتج تام. الأرصدة تتغير بالحركات فقط.", bullets: ["راجع المخازن الثلاثة", "تابع قيمة المخزون", "لا تعدّل الرصيد يدويًا"], action: "انتقل إلى الوصفات", next: "recipes" },
+  recipes: { number: "الخطوة 4", title: "اربط المنتج بمكوناته", text: "الوصفة تخبر النظام بالضبط ما الذي يجب خصمه عند التصنيع أو البيع.", bullets: ["اختر المنتج الناتج", "أدخل كل مكوّن وكميته", "راجع التكلفة المحسوبة"], action: "أنشئ وصفة", modal: "recipe" },
+  production: { number: "الخطوة 5", title: "حوّل الخامات إلى إنتاج فعلي", text: "اختر الوصفة وعدد الدفعات. سيتحقق النظام من الرصيد ثم يخصم المدخلات ويضيف الناتج تلقائيًا.", bullets: ["اختر الوصفة", "حدد الكمية الفعلية", "نفّذ أمر التصنيع"], action: "نفّذ أمر تصنيع", modal: "production" },
+  movements: { number: "الخطوة 6", title: "راجع ما حدث في المخزون", text: "هذه الشاشة سجل تدقيق للقراءة فقط؛ ستجد فيها كل إضافة وخصم وسبب العملية.", bullets: ["طابق رقم المرجع", "راجع الكمية والقيمة", "اكتشف أي حركة غير متوقعة"], action: "راجع التكلفة", next: "costing" },
+  costing: { number: "الخطوة 7", title: "تأكد أن سعر البيع مربح", text: "قارن تكلفة كل منتج بسعر بيعه. اللون الأخضر يعني أن هامش الربح مريح.", bullets: ["راجع تكلفة الوحدة", "قارنها بسعر البيع", "عدّل الوصفة عند انخفاض الهامش"], action: "افتح الكاشير", next: "pos" },
+  pos: { number: "الخطوة 8", title: "أنشئ الطلب وحصّل الحساب", text: "اضغط المنتج لإضافته، اختر وسيلة الدفع، ثم اضغط تحصيل. المكونات ستُخصم تلقائيًا.", bullets: ["أضف المنتجات للطلب", "راجع الإجمالي", "اختر الدفع ثم حصّل"], action: "ابدأ بإضافة منتج", next: "pos" },
+};
+
+function ActionGuide({ section, setSection, setModal }: { section: Section; setSection: (section: Section) => void; setModal: (modal: ModalName) => void }) {
+  const guide = guideContent[section];
+  const act = () => guide.modal ? setModal(guide.modal) : guide.next && setSection(guide.next);
+  return <section className="guide" aria-label="ماذا أفعل الآن؟">
+    <div className="guide-number">{guide.number}</div>
+    <div className="guide-copy"><span>ماذا أفعل الآن؟</span><h2>{guide.title}</h2><p>{guide.text}</p></div>
+    <div className="guide-checks">{guide.bullets.map((bullet) => <div key={bullet}><b>✓</b>{bullet}</div>)}</div>
+    <button className="btn primary guide-action" onClick={act}>{guide.action} ←</button>
+  </section>;
 }
 
 function Stat({ label, value, hint, icon }: { label: string; value: string; hint: string; icon: string }) {
