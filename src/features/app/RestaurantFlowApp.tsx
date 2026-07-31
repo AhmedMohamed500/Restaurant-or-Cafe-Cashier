@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import Image from "next/image";
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { db } from "@/src/db/database";
 import { ensureEmptyWorkspace, resetAllData } from "@/src/db/seed";
 import { addOpeningStock, calculateRecipeCost, completeSale, executeProduction } from "@/src/domain/inventory-service";
@@ -57,6 +58,38 @@ interface AppData {
 }
 
 const emptyData: AppData = { units: [], items: [], warehouses: [], balances: [], recipes: [], movements: [], productionOrders: [] };
+
+async function optimizeItemImage(file: File) {
+  if (!file.type.startsWith("image/")) throw new Error("اختر ملف صورة صالحًا");
+  if (file.size > 8 * 1024 * 1024) throw new Error("حجم الصورة يجب ألا يتجاوز 8 ميجابايت");
+
+  const sourceUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("تعذر قراءة الصورة"));
+      element.src = sourceUrl;
+    });
+    const maxEdge = 900;
+    const scale = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("تعذر تجهيز الصورة");
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/webp", 0.82);
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
+}
+
+function ItemImage({ item, fallback = "🍽️", large = false }: { item?: InventoryItem; fallback?: string; large?: boolean }) {
+  return <span className={`item-image ${large ? "large" : ""}`}>
+    {item?.imageDataUrl ? <Image src={item.imageDataUrl} alt={`صورة ${item.nameAr}`} width={large ? 320 : 84} height={large ? 184 : 84} unoptimized /> : <span aria-hidden="true">{fallback}</span>}
+  </span>;
+}
 
 export function RestaurantFlowApp() {
   const [section, setSection] = useState<Section>("units");
@@ -307,7 +340,7 @@ function ItemsView({ items, balances, units, query, setQuery, refresh, notify }:
           <tbody>{items.map((item) => {
             const balance = balances.filter((x) => x.itemId === item.id).reduce((sum, x) => sum + x.quantity, 0);
             const unit = units.find((x) => x.id === item.baseUnitId)?.symbol;
-            return <tr key={item.id}><td className="item-name"><strong>{item.nameAr}</strong><small>{item.code} · {item.nameEn}</small></td><td><span className={`badge ${item.stage === "raw" ? "green" : item.stage === "work_in_progress" ? "amber" : "blue"}`}>{stageLabels[item.stage]}</span></td><td>{item.category}</td><td>{formatQuantity(balance)} {unit}</td><td>{formatMoney(item.averageCostPiasters)} / {unit}</td><td>{formatQuantity(item.minLevel)} {unit}</td><td><button className="btn small danger" onClick={() => deactivate(item)}>{item.active ? "تعطيل" : "معطلة"}</button></td></tr>;
+            return <tr key={item.id}><td><div className="item-with-image"><ItemImage item={item} fallback={item.stage === "finished" ? "🍽️" : "🥬"} /><div className="item-name"><strong>{item.nameAr}</strong><small>{item.code} · {item.nameEn}</small></div></div></td><td><span className={`badge ${item.stage === "raw" ? "green" : item.stage === "work_in_progress" ? "amber" : "blue"}`}>{stageLabels[item.stage]}</span></td><td>{item.category}</td><td>{formatQuantity(balance)} {unit}</td><td>{formatMoney(item.averageCostPiasters)} / {unit}</td><td>{formatQuantity(item.minLevel)} {unit}</td><td><button className="btn small danger" onClick={() => deactivate(item)}>{item.active ? "تعطيل" : "معطلة"}</button></td></tr>;
           })}</tbody>
         </table></div> : <Empty icon="2" title="لا توجد مواد بعد" text="بعد إضافة وحدات القياس، أضف أول مادة خام يستخدمها مطعمك." />}
       </div>
@@ -340,8 +373,9 @@ function RecipesView({ data, recipeCost }: { data: AppData; recipeCost: (r: Reci
   return <div className="cards">{data.recipes.map((recipe) => {
     const cost = recipeCost(recipe);
     const margin = recipe.sellingPricePiasters ? Math.round((1 - cost / recipe.sellingPricePiasters) * 100) : null;
+    const outputItem = data.items.find((item) => item.id === recipe.outputItemId);
     return <div className="entity-card" key={recipe.id}>
-      <div className="entity-card-top"><div><h3>{recipe.nameAr}</h3><p>{recipe.code} · الإصدار {recipe.version}</p></div><span className="badge green">نشطة</span></div>
+      <div className="entity-card-top"><div className="item-with-image"><ItemImage item={outputItem} fallback="🍳" /><div><h3>{recipe.nameAr}</h3><p>{recipe.code} · الإصدار {recipe.version}</p></div></div><span className="badge green">نشطة</span></div>
       <div className="entity-meta"><span className="badge">{recipe.ingredients.length} مكونات</span><span className="badge blue">ناتج {formatQuantity(recipe.outputQuantity)} {data.units.find((x) => x.id === recipe.outputUnitId)?.symbol}</span></div>
       <div className="progress"><div style={{ width: `${margin ?? 55}%`, background: margin !== null && margin < 30 ? "#c64545" : undefined }} /></div>
       <p>تكلفة الدفعة: <strong>{formatMoney(cost)}</strong>{margin !== null && <> · هامش <strong>{margin}%</strong></>}</p>
@@ -362,7 +396,8 @@ function ProductionView({ data, itemName }: { data: AppData; itemName: (id: stri
       {data.productionOrders.length ? <div className="table-wrap"><table><thead><tr><th>رقم الأمر</th><th>الناتج</th><th>المخطط</th><th>الفعلي</th><th>إجمالي التكلفة</th><th>تكلفة الوحدة</th><th>الحالة</th></tr></thead>
         <tbody>{data.productionOrders.map((order) => {
           const recipe = data.recipes.find((x) => x.id === order.recipeId);
-          return <tr key={order.id}><td><strong>{order.number}</strong></td><td>{itemName(recipe?.outputItemId ?? "")}</td><td>{formatQuantity(order.plannedQuantity)}</td><td>{formatQuantity(order.actualQuantity)}</td><td>{formatMoney(order.totalCostPiasters)}</td><td>{formatMoney(order.unitCostPiasters)}</td><td><span className="badge green">✓ مكتمل</span></td></tr>;
+          const outputItem = data.items.find((item) => item.id === recipe?.outputItemId);
+          return <tr key={order.id}><td><strong>{order.number}</strong></td><td><div className="item-with-image"><ItemImage item={outputItem} fallback="🍳" /><strong>{itemName(recipe?.outputItemId ?? "")}</strong></div></td><td>{formatQuantity(order.plannedQuantity)}</td><td>{formatQuantity(order.actualQuantity)}</td><td>{formatMoney(order.totalCostPiasters)}</td><td>{formatMoney(order.unitCostPiasters)}</td><td><span className="badge green">✓ مكتمل</span></td></tr>;
         })}</tbody></table></div> : <Empty icon="⚙" title="لا توجد أوامر تصنيع بعد" text="أنشئ أول أمر؛ سيتحقق النظام من الأرصدة ثم ينفذ الحركات تلقائيًا." />}
     </div>
   </>;
@@ -373,7 +408,7 @@ function MovementsView({ data, itemName, unitName }: { data: AppData; itemName: 
     <div className="table-wrap"><table><thead><tr><th>التاريخ</th><th>المرجع</th><th>نوع الحركة</th><th>المادة</th><th>المخزن</th><th>الكمية</th><th>القيمة</th></tr></thead>
       <tbody>{data.movements.map((movement) => {
         const item = data.items.find((x) => x.id === movement.itemId);
-        return <tr key={movement.id}><td>{new Date(movement.createdAt).toLocaleString("ar-EG", { dateStyle: "short", timeStyle: "short" })}</td><td><strong>{movement.reference}</strong></td><td><span className={`badge ${movement.quantity > 0 ? "green" : "amber"}`}>{movementLabels[movement.type]}</span></td><td>{itemName(movement.itemId)}</td><td>{data.warehouses.find((x) => x.id === movement.warehouseId)?.nameAr}</td><td style={{ color: movement.quantity > 0 ? "var(--brand)" : "var(--danger)", fontWeight: 800 }}>{movement.quantity > 0 ? "+" : ""}{formatQuantity(movement.quantity)} {unitName(item?.baseUnitId ?? "")}</td><td>{formatMoney(Math.abs(movement.totalCostPiasters))}</td></tr>;
+        return <tr key={movement.id}><td>{new Date(movement.createdAt).toLocaleString("ar-EG", { dateStyle: "short", timeStyle: "short" })}</td><td><strong>{movement.reference}</strong></td><td><span className={`badge ${movement.quantity > 0 ? "green" : "amber"}`}>{movementLabels[movement.type]}</span></td><td><div className="item-with-image"><ItemImage item={item} fallback="🥬" /><strong>{itemName(movement.itemId)}</strong></div></td><td>{data.warehouses.find((x) => x.id === movement.warehouseId)?.nameAr}</td><td style={{ color: movement.quantity > 0 ? "var(--brand)" : "var(--danger)", fontWeight: 800 }}>{movement.quantity > 0 ? "+" : ""}{formatQuantity(movement.quantity)} {unitName(item?.baseUnitId ?? "")}</td><td>{formatMoney(Math.abs(movement.totalCostPiasters))}</td></tr>;
       })}</tbody>
     </table></div>
   </div>;
@@ -419,7 +454,7 @@ function PosView({ data, cart, setCart, payment, setPayment, refresh, notify }: 
   return <div className="pos-layout">
     <div><div className="toolbar"><div className="search"><input placeholder="ابحث عن منتج أو امسح الباركود…" /></div><button className="filter">كل الأقسام</button></div>
       {products.length ? <div className="product-grid">{products.map((product, index) => <button className="product" key={product.id} onClick={() => add(product)}>
-        <span className="product-visual">{["🍕", "🍝", "☕", "🥪"][index % 4]}</span><strong>{product.nameAr}</strong><small className="page-sub">{product.category}</small><span>{formatMoney(product.salePricePiasters ?? 0)}</span>
+        <span className="product-visual"><ItemImage item={product} fallback={["🍕", "🍝", "☕", "🥪"][index % 4]} large /></span><strong>{product.nameAr}</strong><small className="page-sub">{product.category}</small><span>{formatMoney(product.salePricePiasters ?? 0)}</span>
       </button>)}</div> : <div className="panel"><Empty icon="8" title="الكاشير ينتظر منتجاتك" text="أضف منتجًا تامًا بسعر بيع، ثم أنشئ وصفته ليظهر هنا." /></div>}
     </div>
     <div className="panel cart"><div className="panel-head"><div><h2>الطلب الحالي</h2><small>تيك أواي · طلب جديد</small></div><span className="badge green">{cart.reduce((s, x) => s + x.quantity, 0)} أصناف</span></div>
@@ -463,15 +498,27 @@ function UnitForm({ onDone }: { onDone: () => void }) {
 
 function ItemForm({ data, onDone }: { data: AppData; onDone: () => void }) {
   const [error, setError] = useState("");
+  const [imageDataUrl, setImageDataUrl] = useState("");
+  const [imageBusy, setImageBusy] = useState(false);
+  const chooseImage = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return setImageDataUrl("");
+    setError("");
+    setImageBusy(true);
+    try { setImageDataUrl(await optimizeItemImage(file)); }
+    catch (cause) { setImageDataUrl(""); setError(cause instanceof Error ? cause.message : "تعذر تجهيز الصورة"); }
+    finally { setImageBusy(false); }
+  };
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault(); const form = new FormData(e.currentTarget);
+    if (imageBusy) return setError("انتظر لحظة حتى ينتهي تجهيز الصورة");
     try {
       const now = new Date().toISOString();
-      await db.items.add({ id: crypto.randomUUID(), code: String(form.get("code")).toUpperCase(), nameAr: String(form.get("nameAr")), nameEn: String(form.get("nameEn")), category: String(form.get("category")), stage: form.get("stage") as InventoryItem["stage"], baseUnitId: String(form.get("unit")), purchaseUnitId: String(form.get("unit")), purchaseFactor: 1, minLevel: Number(form.get("minLevel")), averageCostPiasters: Math.round(Number(form.get("cost")) * 100), salePricePiasters: form.get("price") ? Math.round(Number(form.get("price")) * 100) : undefined, active: true, createdAt: now, updatedAt: now, createdBy: "local-user" });
+      await db.items.add({ id: crypto.randomUUID(), code: String(form.get("code")).toUpperCase(), nameAr: String(form.get("nameAr")), nameEn: String(form.get("nameEn")), category: String(form.get("category")), stage: form.get("stage") as InventoryItem["stage"], baseUnitId: String(form.get("unit")), purchaseUnitId: String(form.get("unit")), purchaseFactor: 1, minLevel: Number(form.get("minLevel")), averageCostPiasters: Math.round(Number(form.get("cost")) * 100), salePricePiasters: form.get("price") ? Math.round(Number(form.get("price")) * 100) : undefined, imageDataUrl: imageDataUrl || undefined, active: true, createdAt: now, updatedAt: now, createdBy: "local-user" });
       onDone();
     } catch { setError("تعذر حفظ المادة. تأكد من الكود والقيم المطلوبة."); }
   };
-  return <FormShell error={error} onSubmit={submit}><Field label="الاسم بالعربية"><input name="nameAr" required /></Field><Field label="الاسم بالإنجليزية"><input name="nameEn" required /></Field><Field label="كود المادة"><input name="code" required placeholder="RM-005" /></Field><Field label="التصنيف"><input name="category" required placeholder="خضروات" /></Field><Field label="مرحلة المخزون"><select name="stage"><option value="raw">مواد خام</option><option value="work_in_progress">تحت التشغيل</option><option value="finished">منتج تام</option></select></Field><Field label="الوحدة الأساسية"><select name="unit">{data.units.map((x) => <option key={x.id} value={x.id}>{x.nameAr}</option>)}</select></Field><Field label="الحد الأدنى"><input name="minLevel" type="number" min="0" step=".001" defaultValue="0" /></Field><Field label="متوسط تكلفة الوحدة (ج.م)"><input name="cost" type="number" min="0" step=".01" defaultValue="0" /></Field><Field label="سعر البيع للمنتج التام (اختياري)" full><input name="price" type="number" min="0" step=".01" /></Field></FormShell>;
+  return <FormShell error={error} onSubmit={submit}><Field label="الاسم بالعربية"><input name="nameAr" required /></Field><Field label="الاسم بالإنجليزية"><input name="nameEn" required /></Field><Field label="كود المادة"><input name="code" required placeholder="RM-005" /></Field><Field label="التصنيف"><input name="category" required placeholder="خضروات" /></Field><Field label="مرحلة المخزون"><select name="stage"><option value="raw">مواد خام</option><option value="work_in_progress">تحت التشغيل</option><option value="finished">منتج تام</option></select></Field><Field label="الوحدة الأساسية"><select name="unit">{data.units.map((x) => <option key={x.id} value={x.id}>{x.nameAr}</option>)}</select></Field><Field label="الحد الأدنى"><input name="minLevel" type="number" min="0" step=".001" defaultValue="0" /></Field><Field label="متوسط تكلفة الوحدة (ج.م)"><input name="cost" type="number" min="0" step=".01" defaultValue="0" /></Field><Field label="سعر البيع للمنتج التام (اختياري)" full><input name="price" type="number" min="0" step=".01" /></Field><Field label="صورة المادة أو المنتج (اختياري)" full><div className="image-upload"><label className="image-picker"><input name="image" type="file" accept="image/png,image/jpeg,image/webp" onChange={chooseImage} /><span>{imageBusy ? "جارٍ تجهيز الصورة…" : imageDataUrl ? "تغيير الصورة" : "اختيار صورة من الجهاز"}</span><small>JPG أو PNG أو WebP — يتم ضغطها تلقائيًا</small></label><div className="image-preview">{imageDataUrl ? <Image src={imageDataUrl} alt="معاينة صورة المنتج" width={208} height={208} unoptimized /> : <span>📷</span>}</div></div></Field></FormShell>;
 }
 
 function WarehouseForm({ onDone }: { onDone: () => void }) {

@@ -39,6 +39,7 @@ export interface InventoryItem extends AuditFields {
   minLevel: number;
   averageCostPiasters: number;
   salePricePiasters?: number;
+  imageDataUrl?: string;
   active: boolean;
 }
 
