@@ -66,7 +66,7 @@ async function optimizeItemImage(file: File) {
   const sourceUrl = URL.createObjectURL(file);
   try {
     const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const element = new Image();
+      const element = new window.Image();
       element.onload = () => resolve(element);
       element.onerror = () => reject(new Error("تعذر قراءة الصورة"));
       element.src = sourceUrl;
