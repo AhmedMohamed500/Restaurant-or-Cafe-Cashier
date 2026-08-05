@@ -3,9 +3,13 @@ export type ItemStage = "raw" | "work_in_progress" | "finished";
 export type MovementType =
   | "opening"
   | "purchase"
+  | "stock_receipt"
+  | "transfer_to_kitchen_out"
+  | "transfer_to_kitchen_in"
   | "production_consume"
   | "production_output"
   | "sale"
+  | "finished_product_sale"
   | "adjustment"
   | "waste";
 
@@ -95,6 +99,11 @@ export interface StockMovement extends AuditFields {
   totalCostPiasters: number;
   reference: string;
   note?: string;
+  /** Values below preserve how the user entered the movement while quantity stays in the item's base unit. */
+  enteredQuantity?: number;
+  enteredUnitId?: EntityId;
+  sourceWarehouseId?: EntityId;
+  destinationWarehouseId?: EntityId;
 }
 
 export interface ProductionOrder extends AuditFields {

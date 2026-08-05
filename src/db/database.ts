@@ -37,6 +37,24 @@ export class RestaurantFlowDatabase extends Dexie {
       saleOrders: "id, number, createdAt",
       settings: "id",
     });
+    this.version(2).stores({
+      units: "id, code, family, active",
+      items: "id, code, nameAr, category, stage, active",
+      warehouses: "id, code, stage, active",
+      balances: "id, [warehouseId+itemId], warehouseId, itemId",
+      recipes: "id, code, outputItemId, active",
+      movements: "id, warehouseId, itemId, type, reference, createdAt, sourceWarehouseId, destinationWarehouseId",
+      productionOrders: "id, number, recipeId, createdAt",
+      saleOrders: "id, number, createdAt",
+      settings: "id",
+    }).upgrade(async (transaction) => {
+      const movements = transaction.table<StockMovement>("movements");
+      await movements.toCollection().modify((movement) => {
+        movement.enteredQuantity ??= Math.abs(movement.quantity);
+        movement.sourceWarehouseId ??= movement.quantity < 0 ? movement.warehouseId : undefined;
+        movement.destinationWarehouseId ??= movement.quantity > 0 ? movement.warehouseId : undefined;
+      });
+    });
   }
 }
 

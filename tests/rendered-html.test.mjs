@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -20,4 +21,15 @@ test("renders RestaurantFlow Arabic shell", async () => {
   assert.match(html, /lang="ar"/);
   assert.match(html, /dir="rtl"/);
   assert.doesNotMatch(html, /codex-preview/);
+});
+
+test("renders only the five-step operating workflow", async () => {
+  const html = await readFile(new URL("../src/features/app/RestaurantFlowApp.tsx", import.meta.url), "utf8");
+  for (const label of ["المخزون", "المطبخ", "التصنيع", "المنتج التام", "الكاشير"]) {
+    assert.match(html, new RegExp(label));
+  }
+  assert.doesNotMatch(html, /label: "الوحدات"/);
+  assert.doesNotMatch(html, /label: "الوصفات"/);
+  assert.doesNotMatch(html, /label: "حركات المخزون"/);
+  assert.match(html, /المنتج التام فقط/);
 });
