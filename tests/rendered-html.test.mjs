@@ -42,3 +42,10 @@ test("includes restaurant branding and local login flows", async () => {
   assert.match(source, /شعار المطعم/);
   assert.match(source, /hashPassword/);
 });
+
+test("keeps the production withdrawal unit choices consistent", async () => {
+  const source = await readFile(new URL("../src/features/app/RestaurantFlowApp.tsx", import.meta.url), "utf8");
+  assert.match(source, /PRODUCTION_UNIT_CODES = \["KG", "G", "COUNT"\]/);
+  assert.match(source, /aria-label="وحدة سحب مكون التصنيع"/);
+  assert.match(source, /disabled=\{!compatible\}/);
+});
