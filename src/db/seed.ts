@@ -32,7 +32,7 @@ export async function ensureEmptyWorkspace() {
         }
       }
       const settings = await db.settings.get("settings");
-      await db.settings.put({ id: "settings", language: settings?.language ?? "ar", theme: settings?.theme ?? "light", seeded: false, activeShift: settings?.activeShift ?? true });
+      await db.settings.put({ ...settings, id: "settings", language: settings?.language ?? "ar", theme: settings?.theme ?? "light", seeded: false, activeShift: settings?.activeShift ?? true });
     },
   );
 }

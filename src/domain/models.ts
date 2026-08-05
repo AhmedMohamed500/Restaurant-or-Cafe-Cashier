@@ -148,4 +148,8 @@ export interface AppSettings {
   theme: "light" | "dark";
   seeded: boolean;
   activeShift: boolean;
+  restaurantName?: string;
+  logoDataUrl?: string;
+  username?: string;
+  passwordHash?: string;
 }

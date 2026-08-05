@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { assertCompatibleUnitFamilies, convertUnitQuantity } from "../src/lib/units.ts";
 import { multiplyMoney, roundQuantity } from "../src/lib/money.ts";
+import { hashPassword } from "../src/lib/auth.ts";
 
 test("converts kilograms to grams and keeps three decimal places", () => {
   assert.equal(convertUnitQuantity(10, 1000, 1), 10000);
@@ -26,4 +27,12 @@ test("rejects zero and negative quantities", () => {
 test("stores money calculations as integer piasters", () => {
   assert.equal(multiplyMoney(125, 2.5), 313);
   assert.equal(Number.isInteger(multiplyMoney(125, 2.5)), true);
+});
+
+test("hashes local passwords without storing their plain text", async () => {
+  const first = await hashPassword("restaurant-secret");
+  const second = await hashPassword("restaurant-secret");
+  assert.equal(first, second);
+  assert.equal(first.length, 64);
+  assert.notEqual(first, "restaurant-secret");
 });

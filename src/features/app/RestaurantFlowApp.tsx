@@ -5,11 +5,12 @@ import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent, typ
 import { db } from "@/src/db/database";
 import { ensureEmptyWorkspace, resetAllData } from "@/src/db/seed";
 import { addOpeningStock, completeSale, executeProduction, saveProductionDefinition, transferToKitchen } from "@/src/domain/inventory-service";
-import type { InventoryItem, OrderItem, ProductionOrder, Recipe, SaleOrder, StockBalance, StockMovement, UnitOfMeasure, Warehouse } from "@/src/domain/models";
+import type { AppSettings, InventoryItem, OrderItem, ProductionOrder, Recipe, SaleOrder, StockBalance, StockMovement, UnitOfMeasure, Warehouse } from "@/src/domain/models";
 import { formatMoney, formatQuantity } from "@/src/lib/money";
+import { hashPassword } from "@/src/lib/auth";
 
 type Section = "inventory" | "kitchen" | "production" | "finished" | "pos";
-type ModalName = "receipt" | "transfer" | "production" | null;
+type ModalName = "receipt" | "transfer" | "production" | "settings" | null;
 
 const navItems: { id: Section; icon: string; label: string; eyebrow: string; description: string }[] = [
   { id: "inventory", icon: "▦", label: "المخزون", eyebrow: "الخطوة 1 من 5", description: "أضف مشترياتك إلى المخزن الرئيسي بوحدتها وتكلفتها الفعلية." },
@@ -34,10 +35,11 @@ interface AppData {
   recipes: Recipe[];
   movements: StockMovement[];
   productionOrders: ProductionOrder[];
+  settings?: AppSettings;
 }
 
 const emptyData: AppData = { units: [], items: [], warehouses: [], balances: [], recipes: [], movements: [], productionOrders: [] };
-const RESTAURANT_NAME = "RestaurantFlow";
+const AUTH_SESSION_KEY = "restaurantflow-authenticated";
 
 async function optimizeItemImage(file: File) {
   if (!file.type.startsWith("image/")) throw new Error("اختر ملف صورة صالحًا");
@@ -61,6 +63,11 @@ function ItemImage({ item, fallback = "🍽️", large = false }: { item?: Inven
   return <span className={`item-image ${large ? "large" : ""}`}>{item?.imageDataUrl ? <Image src={item.imageDataUrl} alt={`صورة ${item.nameAr}`} width={large ? 420 : 84} height={large ? 300 : 84} unoptimized /> : <span aria-hidden="true">{fallback}</span>}</span>;
 }
 
+function BrandLogo({ settings, large = false }: { settings?: AppSettings; large?: boolean }) {
+  const letter = (settings?.restaurantName || "RestaurantFlow").trim().slice(0, 1).toUpperCase() || "R";
+  return <div className={`brand-mark ${large ? "auth-logo" : ""}`}>{settings?.logoDataUrl ? <Image src={settings.logoDataUrl} alt={`شعار ${settings.restaurantName}`} width={large ? 120 : 64} height={large ? 120 : 64} unoptimized /> : letter}</div>;
+}
+
 export function RestaurantFlowApp() {
   const [section, setSection] = useState<Section>("inventory");
   const [modal, setModal] = useState<ModalName>(null);
@@ -69,18 +76,25 @@ export function RestaurantFlowApp() {
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [payment, setPayment] = useState<"cash" | "card" | "wallet">("cash");
+  const [authenticated, setAuthenticated] = useState(false);
 
   const notify = useCallback((text: string, error = false) => {
     setToast({ text, error }); window.setTimeout(() => setToast(null), 3800);
   }, []);
   const refresh = useCallback(async () => {
-    const [units, items, warehouses, balances, recipes, movements, productionOrders] = await Promise.all([
+    const [units, items, warehouses, balances, recipes, movements, productionOrders, settings] = await Promise.all([
       db.units.toArray(), db.items.toArray(), db.warehouses.toArray(), db.balances.toArray(), db.recipes.toArray(),
-      db.movements.orderBy("createdAt").reverse().toArray(), db.productionOrders.orderBy("createdAt").reverse().toArray(),
+      db.movements.orderBy("createdAt").reverse().toArray(), db.productionOrders.orderBy("createdAt").reverse().toArray(), db.settings.get("settings"),
     ]);
-    setData({ units, items, warehouses, balances, recipes, movements, productionOrders });
+    setData({ units, items, warehouses, balances, recipes, movements, productionOrders, settings });
   }, []);
-  useEffect(() => { ensureEmptyWorkspace().then(refresh).then(() => setReady(true)).catch((error) => notify(error.message, true)); }, [notify, refresh]);
+  useEffect(() => {
+    ensureEmptyWorkspace().then(refresh).then(async () => {
+      const settings = await db.settings.get("settings");
+      setAuthenticated(Boolean(settings?.passwordHash && sessionStorage.getItem(AUTH_SESSION_KEY) === "1"));
+      setReady(true);
+    }).catch((error) => notify(error.message, true));
+  }, [notify, refresh]);
 
   const activeNav = navItems.find((item) => item.id === section)!;
   const goNext = () => setSection(navItems[Math.min(navItems.length - 1, navItems.findIndex((item) => item.id === section) + 1)].id);
@@ -93,17 +107,20 @@ export function RestaurantFlowApp() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = `restaurantflow-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url); notify("تم تصدير النسخة الاحتياطية");
   };
+  const logout = () => { sessionStorage.removeItem(AUTH_SESSION_KEY); setAuthenticated(false); setCart([]); };
 
   if (!ready) return <div className="loading"><div className="loading-card"><div className="loader" /><strong>جاري تجهيز RestaurantFlow</strong><p className="page-sub">تحميل دورة التشغيل…</p></div></div>;
+  if (!data.settings?.passwordHash) return <AccountSetup onDone={async () => { sessionStorage.setItem(AUTH_SESSION_KEY, "1"); setAuthenticated(true); await refresh(); }} />;
+  if (!authenticated) return <LoginScreen settings={data.settings} onSuccess={() => { sessionStorage.setItem(AUTH_SESSION_KEY, "1"); setAuthenticated(true); }} />;
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><div className="brand-mark">R</div><div><strong>RestaurantFlow</strong><small>SMART RESTAURANT OS</small></div></div>
+      <div className="brand"><BrandLogo settings={data.settings} /><div><strong>{data.settings?.restaurantName ?? "RestaurantFlow"}</strong><small>SMART RESTAURANT OS</small></div></div>
       <div className="nav-label">دورة التشغيل</div>
       <nav className="nav" aria-label="التنقل الرئيسي">{navItems.map((item, index) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}><span>{item.icon}</span><span><small>{index + 1}</small>{item.label}</span></button>)}</nav>
-      <div className="user-card"><div className="avatar">م</div><div><strong>مدير النظام</strong><small>الحساب المحلي</small></div></div>
+      <div className="user-card"><div className="avatar">{data.settings?.username?.slice(0, 1).toUpperCase()}</div><div><strong>{data.settings?.username}</strong><small>مدير النظام</small></div></div>
     </aside>
     <main className="main">
-      <header className="topbar"><div className="branch"><span className="branch-dot" /><div><strong>الفرع الرئيسي</strong><small>البيانات محفوظة محليًا</small></div></div><div className="top-actions"><button className="chip" onClick={exportBackup}>↓ نسخة احتياطية</button><button className="chip" onClick={reset}>⌫ مسح البيانات</button><span className="chip shift-chip">● وردية مفتوحة</span></div></header>
+      <header className="topbar"><div className="branch"><span className="branch-dot" /><div><strong>{data.settings?.restaurantName}</strong><small>الفرع الرئيسي · البيانات محفوظة محليًا</small></div></div><div className="top-actions"><button className="chip" onClick={() => setModal("settings")}>⚙ إعدادات المطعم</button><button className="chip" onClick={exportBackup}>↓ نسخة احتياطية</button><button className="chip" onClick={reset}>⌫ مسح البيانات</button><button className="chip danger" onClick={logout}>خروج</button><span className="chip shift-chip">● وردية مفتوحة</span></div></header>
       <div className="content">
         <div className="flow-steps" aria-label="المخزون ثم المطبخ ثم التصنيع ثم المنتج التام ثم الكاشير">{navItems.map((item, index) => <span key={item.id} style={{ display: "contents" }}><button className={`flow-step ${navItems.findIndex((entry) => entry.id === section) >= index ? "done" : ""}`} onClick={() => setSection(item.id)}><b>{index + 1}</b>{item.label}</button>{index < navItems.length - 1 && <span className="flow-arrow">←</span>}</span>)}</div>
         <div className="page-head"><div><p className="eyebrow">{activeNav.eyebrow}</p><h1>{activeNav.label}</h1><p className="page-sub">{activeNav.description}</p></div><div className="head-actions">{section === "inventory" && <button className="btn primary" onClick={() => setModal("receipt")}>＋ إذن إضافة</button>}{section === "kitchen" && <button className="btn primary" onClick={() => setModal("transfer")}>⇄ تحويل إلى المطبخ</button>}{section === "production" && <button className="btn primary" onClick={() => setModal("production")}>⚙ أمر تصنيع</button>}</div></div>
@@ -115,13 +132,47 @@ export function RestaurantFlowApp() {
         {section === "pos" && <PosView data={data} cart={cart} setCart={setCart} payment={payment} setPayment={setPayment} refresh={refresh} notify={notify} />}
       </div>
     </main>
-    {modal && <Modal title={modal === "receipt" ? "إذن إضافة إلى المخزون" : modal === "transfer" ? "تحويل إلى المطبخ" : "أمر تصنيع منتج تام"} onClose={() => setModal(null)}>
+    {modal && <Modal title={modal === "receipt" ? "إذن إضافة إلى المخزون" : modal === "transfer" ? "تحويل إلى المطبخ" : modal === "production" ? "أمر تصنيع منتج تام" : "إعدادات المطعم والدخول"} onClose={() => setModal(null)}>
       {modal === "receipt" && <StockReceiptForm data={data} onDone={async () => { setModal(null); await refresh(); notify("تم تنفيذ إذن الإضافة وتحديث المخزون"); }} />}
       {modal === "transfer" && <KitchenTransferForm data={data} onDone={async () => { setModal(null); await refresh(); notify("تم التحويل إلى المطبخ بحركتين مرتبطتين"); }} />}
       {modal === "production" && <ProductionForm data={data} onDone={async (order) => { setModal(null); await refresh(); notify(`اكتمل ${order.number} بتكلفة ${formatMoney(order.totalCostPiasters)}`); }} />}
+      {modal === "settings" && <RestaurantSettingsForm settings={data.settings} onDone={async () => { setModal(null); await refresh(); notify("تم تحديث اسم المطعم والشعار وبيانات الدخول"); }} />}
     </Modal>}
     {toast && <div className={`toast ${toast.error ? "error" : ""}`}>{toast.error ? "⚠ " : "✓ "}{toast.text}</div>}
   </div>;
+}
+
+function AccountSetup({ onDone }: { onDone: () => void }) {
+  const [error, setError] = useState("");
+  const [logoDataUrl, setLogoDataUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const chooseLogo = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]; if (!file) return setLogoDataUrl("");
+    setBusy(true); setError("");
+    try { setLogoDataUrl(await optimizeItemImage(file)); } catch (cause) { setError(cause instanceof Error ? cause.message : "تعذر تجهيز الشعار"); } finally { setBusy(false); }
+  };
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const form = new FormData(event.currentTarget);
+    const username = String(form.get("username")).trim(); const password = String(form.get("password")); const confirm = String(form.get("confirm"));
+    if (username.length < 3) return setError("اسم المستخدم يجب أن يكون 3 أحرف على الأقل");
+    if (password.length < 6) return setError("كلمة المرور يجب أن تكون 6 أحرف على الأقل");
+    if (password !== confirm) return setError("تأكيد كلمة المرور غير مطابق");
+    if (busy) return setError("انتظر حتى ينتهي تجهيز الشعار");
+    await db.settings.update("settings", { restaurantName: String(form.get("restaurantName")).trim(), logoDataUrl: logoDataUrl || undefined, username, passwordHash: await hashPassword(password) });
+    onDone();
+  };
+  return <div className="auth-shell"><section className="auth-card"><div className="auth-brand"><BrandLogo settings={{ id: "settings", language: "ar", theme: "light", seeded: false, activeShift: true, restaurantName: "RestaurantFlow", logoDataUrl }} large /><div><span>إعداد مجاني لأول مرة</span><h1>جهّز حساب مطعمك</h1><p>أدخل اسم المطعم وشعاره وبيانات الدخول. تُحفظ على هذا الجهاز فقط.</p></div></div><form onSubmit={submit}>{error && <div className="form-error">{error}</div>}<div className="form-grid"><Field label="اسم المطعم" full><input name="restaurantName" required placeholder="مثال: مطعم السعادة" /></Field><Field label="اسم المستخدم"><input name="username" autoComplete="username" required placeholder="admin" /></Field><Field label="شعار المطعم (اختياري)"><label className="compact-upload"><input type="file" accept="image/png,image/jpeg,image/webp" onChange={chooseLogo} />{busy ? "جارٍ تجهيز الشعار…" : "رفع صورة الشعار"}</label></Field><Field label="كلمة المرور"><input name="password" type="password" autoComplete="new-password" minLength={6} required /></Field><Field label="تأكيد كلمة المرور"><input name="confirm" type="password" autoComplete="new-password" minLength={6} required /></Field></div><button className="btn primary auth-submit" type="submit">حفظ وفتح النظام</button></form><p className="auth-note">لا توجد اشتراكات أو خدمات مدفوعة. الحماية محلية لهذا المتصفح والجهاز.</p></section></div>;
+}
+
+function LoginScreen({ settings, onSuccess }: { settings: AppSettings; onSuccess: () => void }) {
+  const [error, setError] = useState("");
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const form = new FormData(event.currentTarget);
+    const username = String(form.get("username")).trim(); const password = String(form.get("password"));
+    if (username !== settings.username || await hashPassword(password) !== settings.passwordHash) return setError("اسم المستخدم أو كلمة المرور غير صحيحة");
+    onSuccess();
+  };
+  return <div className="auth-shell"><section className="auth-card login-card"><div className="auth-brand login-brand"><BrandLogo settings={settings} large /><div><span>مرحبًا بعودتك</span><h1>{settings.restaurantName}</h1><p>سجّل الدخول لإدارة المخزون والتصنيع والكاشير.</p></div></div><form onSubmit={submit}>{error && <div className="form-error">{error}</div>}<div className="form-grid one-column"><Field label="اسم المستخدم" full><input name="username" autoComplete="username" required autoFocus /></Field><Field label="كلمة المرور" full><input name="password" type="password" autoComplete="current-password" required /></Field></div><button className="btn primary auth-submit" type="submit">دخول إلى النظام</button></form><p className="auth-note">بيانات الدخول خاصة بهذا المتصفح. مسح بيانات الموقع يعيد الإعداد من البداية.</p></section></div>;
 }
 
 const guideContent: Record<Section, { title: string; bullets: string[]; action: string }> = {
@@ -197,6 +248,21 @@ function useImagePicker(setError: (value: string) => void) {
   return { imageDataUrl, busy, chooseImage };
 }
 
+function RestaurantSettingsForm({ settings, onDone }: { settings?: AppSettings; onDone: () => void }) {
+  const [error, setError] = useState(""); const [logoDataUrl, setLogoDataUrl] = useState(settings?.logoDataUrl ?? ""); const [busy, setBusy] = useState(false);
+  const chooseLogo = async (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (!file) return; setBusy(true); setError(""); try { setLogoDataUrl(await optimizeItemImage(file)); } catch (cause) { setError(cause instanceof Error ? cause.message : "تعذر تجهيز الشعار"); } finally { setBusy(false); } };
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const form = new FormData(event.currentTarget); const username = String(form.get("username")).trim(); const password = String(form.get("password")); const confirm = String(form.get("confirm"));
+    if (username.length < 3) return setError("اسم المستخدم يجب أن يكون 3 أحرف على الأقل");
+    if (password && password.length < 6) return setError("كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل");
+    if (password !== confirm) return setError("تأكيد كلمة المرور غير مطابق");
+    if (busy) return setError("انتظر حتى ينتهي تجهيز الشعار");
+    await db.settings.update("settings", { restaurantName: String(form.get("restaurantName")).trim(), logoDataUrl: logoDataUrl || undefined, username, passwordHash: password ? await hashPassword(password) : settings?.passwordHash });
+    onDone();
+  };
+  return <FormShell error={error} onSubmit={submit} submitLabel="حفظ إعدادات المطعم"><Field label="اسم المطعم" full><input name="restaurantName" defaultValue={settings?.restaurantName} required /></Field><Field label="اسم المستخدم"><input name="username" defaultValue={settings?.username} autoComplete="username" required /></Field><Field label="الشعار"><div className="settings-logo"><BrandLogo settings={{ ...settings, id: "settings", language: settings?.language ?? "ar", theme: settings?.theme ?? "light", seeded: false, activeShift: settings?.activeShift ?? true, logoDataUrl }} /><label className="compact-upload"><input type="file" accept="image/png,image/jpeg,image/webp" onChange={chooseLogo} />تغيير الشعار</label>{logoDataUrl && <button type="button" className="btn small danger" onClick={() => setLogoDataUrl("")}>حذف</button>}</div></Field><Field label="كلمة مرور جديدة (اختياري)"><input name="password" type="password" autoComplete="new-password" placeholder="اتركها فارغة دون تغيير" /></Field><Field label="تأكيد كلمة المرور الجديدة"><input name="confirm" type="password" autoComplete="new-password" /></Field><Field label="معلومة مهمة" full><div className="local-security-note">يتم حفظ بصمة كلمة المرور والشعار محليًا داخل هذا المتصفح. لا تُرسل كلمة المرور إلى خادم خارجي.</div></Field></FormShell>;
+}
+
 function StockReceiptForm({ data, onDone }: { data: AppData; onDone: () => void }) {
   const [error, setError] = useState(""); const image = useImagePicker(setError); const allowedUnits = data.units.filter((unit) => unit.active && ["mass", "count"].includes(unit.family));
   const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (image.busy) return setError("انتظر تجهيز الصورة"); const form = new FormData(event.currentTarget); try { await addOpeningStock({ newItem: { nameAr: String(form.get("nameAr")), nameEn: String(form.get("nameEn") || form.get("nameAr")), code: String(form.get("code")), category: String(form.get("category")), minLevel: Number(form.get("minLevel")), imageDataUrl: image.imageDataUrl || undefined }, quantity: Number(form.get("quantity")), enteredUnitId: String(form.get("unit")), unitCostPiasters: Math.round(Number(form.get("cost")) * 100), reference: String(form.get("reference")), note: String(form.get("note")) }); onDone(); } catch (cause) { setError(cause instanceof Error ? cause.message : "تعذر تنفيذ إذن الإضافة"); } };
@@ -218,6 +284,8 @@ function ProductionForm({ data, onDone }: { data: AppData; onDone: (order: Produ
 }
 
 function ReceiptDialog({ sale, onClose }: { sale: SaleOrder; onClose: () => void }) {
+  const [settings, setSettings] = useState<AppSettings>();
+  useEffect(() => { db.settings.get("settings").then(setSettings); }, []);
   const totalQuantity = sale.items.reduce((sum, item) => sum + item.quantity, 0); const paymentLabel = sale.paymentMethod === "cash" ? "نقدي" : sale.paymentMethod === "card" ? "بطاقة" : "محفظة إلكترونية";
-  return <div className="receipt-backdrop" role="dialog" aria-modal="true"><article className="receipt-sheet"><header className="receipt-header"><div className="receipt-logo">R</div><div><h2>{RESTAURANT_NAME}</h2><p>الفرع الرئيسي · إيصال بيع</p></div></header><div className="receipt-meta"><div><span>رقم الطلب</span><strong>{sale.number}</strong></div><div><span>التاريخ والوقت</span><strong>{new Date(sale.createdAt).toLocaleString("ar-EG", { dateStyle: "medium", timeStyle: "short" })}</strong></div><div><span>نوع الطلب</span><strong>تيك أواي</strong></div><div><span>طريقة الدفع</span><strong>{paymentLabel}</strong></div></div><table className="receipt-table"><thead><tr><th>الصنف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>{sale.items.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.quantity}</td><td>{formatMoney(item.unitPricePiasters)}</td><td>{formatMoney(item.unitPricePiasters * item.quantity)}</td></tr>)}</tbody></table><div className="receipt-counts"><span>عدد الأصناف: <strong>{sale.items.length}</strong></span><span>إجمالي الكميات: <strong>{totalQuantity}</strong></span></div><div className="receipt-totals"><div><span>الإجمالي الفرعي</span><strong>{formatMoney(sale.subtotalPiasters)}</strong></div><div><span>الضريبة 14%</span><strong>{formatMoney(sale.taxPiasters)}</strong></div><div className="receipt-grand"><span>الإجمالي</span><strong>{formatMoney(sale.totalPiasters)}</strong></div></div><p className="receipt-thanks">شكرًا لزيارتكم — نتمنى لكم وجبة سعيدة</p><div className="receipt-actions"><button className="btn" onClick={onClose}>طلب جديد</button><button className="btn primary" onClick={() => window.print()}>طباعة الإيصال</button></div></article></div>;
+  return <div className="receipt-backdrop" role="dialog" aria-modal="true"><article className="receipt-sheet"><header className="receipt-header"><BrandLogo settings={settings} /><div><h2>{settings?.restaurantName ?? "RestaurantFlow"}</h2><p>الفرع الرئيسي · إيصال بيع</p></div></header><div className="receipt-meta"><div><span>رقم الطلب</span><strong>{sale.number}</strong></div><div><span>التاريخ والوقت</span><strong>{new Date(sale.createdAt).toLocaleString("ar-EG", { dateStyle: "medium", timeStyle: "short" })}</strong></div><div><span>نوع الطلب</span><strong>تيك أواي</strong></div><div><span>طريقة الدفع</span><strong>{paymentLabel}</strong></div></div><table className="receipt-table"><thead><tr><th>الصنف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>{sale.items.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.quantity}</td><td>{formatMoney(item.unitPricePiasters)}</td><td>{formatMoney(item.unitPricePiasters * item.quantity)}</td></tr>)}</tbody></table><div className="receipt-counts"><span>عدد الأصناف: <strong>{sale.items.length}</strong></span><span>إجمالي الكميات: <strong>{totalQuantity}</strong></span></div><div className="receipt-totals"><div><span>الإجمالي الفرعي</span><strong>{formatMoney(sale.subtotalPiasters)}</strong></div><div><span>الضريبة 14%</span><strong>{formatMoney(sale.taxPiasters)}</strong></div><div className="receipt-grand"><span>الإجمالي</span><strong>{formatMoney(sale.totalPiasters)}</strong></div></div><p className="receipt-thanks">شكرًا لزيارتكم — نتمنى لكم وجبة سعيدة</p><div className="receipt-actions"><button className="btn" onClick={onClose}>طلب جديد</button><button className="btn primary" onClick={() => window.print()}>طباعة الإيصال</button></div></article></div>;
 }

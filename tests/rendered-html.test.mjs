@@ -33,3 +33,12 @@ test("renders only the five-step operating workflow", async () => {
   assert.doesNotMatch(html, /label: "حركات المخزون"/);
   assert.match(html, /المنتج التام فقط/);
 });
+
+test("includes restaurant branding and local login flows", async () => {
+  const source = await readFile(new URL("../src/features/app/RestaurantFlowApp.tsx", import.meta.url), "utf8");
+  assert.match(source, /جهّز حساب مطعمك/);
+  assert.match(source, /دخول إلى النظام/);
+  assert.match(source, /إعدادات المطعم/);
+  assert.match(source, /شعار المطعم/);
+  assert.match(source, /hashPassword/);
+});
