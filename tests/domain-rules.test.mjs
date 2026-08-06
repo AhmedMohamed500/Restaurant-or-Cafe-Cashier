@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertCompatibleUnitFamilies, convertUnitQuantity } from "../src/lib/units.ts";
+import { assertCompatibleUnitFamilies, convertUnitQuantity, normalizeRecipeMassQuantity } from "../src/lib/units.ts";
 import { multiplyMoney, roundQuantity } from "../src/lib/money.ts";
 import { hashPassword } from "../src/lib/auth.ts";
 
@@ -12,6 +12,12 @@ test("converts kilograms to grams and keeps three decimal places", () => {
 test("converts grams to kilograms", () => {
   assert.equal(convertUnitQuantity(750, 1, 1000), 0.75);
   assert.equal(roundQuantity(10 - convertUnitQuantity(750, 1, 1000)), 9.25);
+});
+
+test("normalizes recipe weights to grams", () => {
+  assert.equal(normalizeRecipeMassQuantity(1.5, "mass", 1000), 1500);
+  assert.equal(normalizeRecipeMassQuantity(125, "mass", 1), 125);
+  assert.equal(normalizeRecipeMassQuantity(3, "count", 1), 3);
 });
 
 test("rejects conversion between mass and count", () => {

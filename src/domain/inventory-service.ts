@@ -13,7 +13,7 @@ import type {
   Warehouse,
 } from "./models";
 import { multiplyMoney, roundQuantity } from "@/src/lib/money";
-import { assertCompatibleUnitFamilies, convertUnitQuantity } from "@/src/lib/units";
+import { assertCompatibleUnitFamilies, convertUnitQuantity, normalizeRecipeMassQuantity } from "@/src/lib/units";
 
 const now = () => new Date().toISOString();
 const uid = () => crypto.randomUUID();
@@ -50,6 +50,17 @@ async function quantityInBase(item: InventoryItem, enteredUnitId: string, entere
   if (!enteredUnit || !baseUnit) throw new Error("وحدة القياس غير موجودة");
   ensureSameUnitFamily(enteredUnit, baseUnit);
   return { quantityBase: convertUnit(enteredQuantity, enteredUnit.baseFactor, baseUnit.baseFactor), enteredUnit, baseUnit };
+}
+
+async function normalizeRecipeIngredientsToGrams(ingredients: Recipe["ingredients"]) {
+  const gramUnit = await db.units.where("code").equals("G").first();
+  if (!gramUnit) throw new Error("وحدة الجرام غير موجودة");
+  return Promise.all(ingredients.map(async (ingredient) => {
+    const unit = await db.units.get(ingredient.unitId);
+    if (!unit) throw new Error("وحدة أحد مكونات الوصفة غير موجودة");
+    if (unit.family !== "mass") return ingredient;
+    return { ...ingredient, quantity: normalizeRecipeMassQuantity(ingredient.quantity, unit.family, unit.baseFactor), unitId: gramUnit.id };
+  }));
 }
 
 export async function calculateRecipeCost(recipeId: string, multiplier = 1) {
@@ -163,6 +174,11 @@ export async function executeProduction(input: {
   return db.transaction("rw", [db.units, db.recipes, db.items, db.warehouses, db.balances, db.movements, db.productionOrders], async () => {
     const recipe = await db.recipes.get(input.recipeId);
     if (!recipe) throw new Error("أمر التصنيع غير موجود");
+    const normalizedIngredients = await normalizeRecipeIngredientsToGrams(recipe.ingredients);
+    const normalizedRecipe = { ...recipe, ingredients: normalizedIngredients };
+    if (normalizedIngredients.some((ingredient, index) => ingredient.quantity !== recipe.ingredients[index].quantity || ingredient.unitId !== recipe.ingredients[index].unitId)) {
+      await db.recipes.update(recipe.id, { ingredients: normalizedIngredients, updatedAt: now() });
+    }
     if (input.batches <= 0) throw new Error("عدد دفعات الإنتاج غير صحيح");
     const [kitchen, finishedWarehouse] = await Promise.all([activeWarehouse("work_in_progress"), activeWarehouse("finished")]);
     const sourceWarehouseId = input.sourceWarehouseId ?? kitchen.id;
@@ -171,7 +187,7 @@ export async function executeProduction(input: {
     if (targetWarehouseId !== finishedWarehouse.id) throw new Error("ناتج التصنيع يجب أن يضاف إلى المنتج التام");
 
     const requirements = [];
-    for (const ingredient of recipe.ingredients.filter((entry) => !entry.optional)) {
+    for (const ingredient of normalizedRecipe.ingredients.filter((entry) => !entry.optional)) {
       const item = await db.items.get(ingredient.itemId);
       if (!item) throw new Error("أحد مكونات التصنيع غير موجود");
       const enteredQuantity = roundQuantity(ingredient.quantity * input.batches * (1 + ingredient.wastePercent / 100));
@@ -185,10 +201,10 @@ export async function executeProduction(input: {
       requirements.push({ ingredient, item, balance, quantityBase, enteredQuantity });
     }
 
-    const outputItem = await db.items.get(recipe.outputItemId);
+    const outputItem = await db.items.get(normalizedRecipe.outputItemId);
     if (!outputItem || outputItem.stage !== "finished") throw new Error("يجب أن يكون ناتج التصنيع منتجًا تامًا");
-    const actualEntered = input.actualQuantity ?? recipe.outputQuantity * input.batches;
-    const outputConversion = await quantityInBase(outputItem, recipe.outputUnitId, actualEntered);
+    const actualEntered = input.actualQuantity ?? normalizedRecipe.outputQuantity * input.batches;
+    const outputConversion = await quantityInBase(outputItem, normalizedRecipe.outputUnitId, actualEntered);
     const actualQuantity = outputConversion.quantityBase;
     const reference = `MO-${Date.now().toString().slice(-8)}`;
     const timestamp = now();
@@ -217,12 +233,12 @@ export async function executeProduction(input: {
     await db.items.update(outputItem.id, { averageCostPiasters: newAverageCost, salePricePiasters: recipe.sellingPricePiasters ?? outputItem.salePricePiasters, updatedAt: timestamp });
     movements.push({
       id: uid(), warehouseId: finishedWarehouse.id, destinationWarehouseId: finishedWarehouse.id, itemId: outputItem.id,
-      type: "production_output", quantity: actualQuantity, enteredQuantity: actualEntered, enteredUnitId: recipe.outputUnitId,
+      type: "production_output", quantity: actualQuantity, enteredQuantity: actualEntered, enteredUnitId: normalizedRecipe.outputUnitId,
       unitCostPiasters: unitCost, totalCostPiasters: totalCost, reference, createdAt: timestamp, updatedAt: timestamp, createdBy: actor,
     });
     await db.movements.bulkPut(movements);
 
-    const plannedConversion = await quantityInBase(outputItem, recipe.outputUnitId, recipe.outputQuantity * input.batches);
+    const plannedConversion = await quantityInBase(outputItem, normalizedRecipe.outputUnitId, normalizedRecipe.outputQuantity * input.batches);
     const order: ProductionOrder = {
       id: uid(), number: reference, recipeId: recipe.id, plannedQuantity: plannedConversion.quantityBase,
       actualQuantity, sourceWarehouseId: kitchen.id, targetWarehouseId: finishedWarehouse.id,
@@ -273,8 +289,9 @@ export async function saveProductionDefinition(input: {
   ingredients: Recipe["ingredients"];
   wastePercent?: number;
 }) {
-  return db.transaction("rw", [db.items, db.recipes], async () => {
+  return db.transaction("rw", [db.units, db.items, db.recipes], async () => {
     if (!input.ingredients.length) throw new Error("أضف مكونًا واحدًا على الأقل");
+    const normalizedIngredients = await normalizeRecipeIngredientsToGrams(input.ingredients);
     const timestamp = now();
     let product = await db.items.where("code").equals(input.product.code.toUpperCase()).first();
     if (!product) {
@@ -292,7 +309,7 @@ export async function saveProductionDefinition(input: {
     const recipe: Recipe = {
       id: uid(), code: `REC-${input.product.code.toUpperCase()}`, nameAr: `تصنيع ${input.product.nameAr}`,
       outputItemId: product.id, outputQuantity: input.outputQuantity, outputUnitId: input.outputUnitId,
-      sellingPricePiasters: input.product.salePricePiasters, version: 1, ingredients: input.ingredients,
+      sellingPricePiasters: input.product.salePricePiasters, version: 1, ingredients: normalizedIngredients,
       active: true, createdAt: timestamp, updatedAt: timestamp, createdBy: actor,
     };
     await db.recipes.add(recipe);

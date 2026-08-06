@@ -1,6 +1,7 @@
 "use client";
 
 import { db } from "./database";
+import { normalizeRecipeMassQuantity } from "@/src/lib/units";
 
 const systemUnits = [
   { id: "unit-g", code: "G", nameAr: "جرام", nameEn: "Gram", symbol: "جم", family: "mass" as const, baseFactor: 1 },
@@ -18,7 +19,7 @@ const systemWarehouses = [
 export async function ensureEmptyWorkspace() {
   await db.transaction(
     "rw",
-    [db.units, db.warehouses, db.settings],
+    [db.units, db.warehouses, db.recipes, db.settings],
     async () => {
       const timestamp = new Date().toISOString();
       for (const unit of systemUnits) {
@@ -30,6 +31,21 @@ export async function ensureEmptyWorkspace() {
         if (!(await db.warehouses.where("code").equals(warehouse.code).first())) {
           await db.warehouses.put({ ...warehouse, branchName: "الفرع الرئيسي", active: true, createdAt: timestamp, updatedAt: timestamp, createdBy: "system" });
         }
+      }
+      const gramUnit = await db.units.where("code").equals("G").first();
+      const units = await db.units.toArray();
+      const unitsById = new Map(units.map((unit) => [unit.id, unit]));
+      if (gramUnit) {
+        await db.recipes.toCollection().modify((recipe) => {
+          let changed = false;
+          recipe.ingredients = recipe.ingredients.map((ingredient) => {
+            const unit = unitsById.get(ingredient.unitId);
+            if (!unit || unit.family !== "mass" || unit.id === gramUnit.id) return ingredient;
+            changed = true;
+            return { ...ingredient, quantity: normalizeRecipeMassQuantity(ingredient.quantity, unit.family, unit.baseFactor), unitId: gramUnit.id };
+          });
+          if (changed) recipe.updatedAt = timestamp;
+        });
       }
       const settings = await db.settings.get("settings");
       await db.settings.put({ ...settings, id: "settings", language: settings?.language ?? "ar", theme: settings?.theme ?? "light", seeded: false, activeShift: settings?.activeShift ?? true });

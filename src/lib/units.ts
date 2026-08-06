@@ -9,3 +9,8 @@ export function convertUnitQuantity(quantity: number, fromFactor: number, toFact
 export function assertCompatibleUnitFamilies(from: UnitFamily, to: UnitFamily) {
   if (from !== to) throw new Error("لا يمكن التحويل بين وحدات الوزن ووحدة العدد");
 }
+
+/** Recipes persist mass ingredients in grams so their quantities stay unambiguous. */
+export function normalizeRecipeMassQuantity(quantity: number, family: UnitFamily, unitFactor: number) {
+  return family === "mass" ? convertUnitQuantity(quantity, unitFactor, 1) : quantity;
+}

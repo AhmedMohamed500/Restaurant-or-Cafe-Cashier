@@ -48,4 +48,6 @@ test("keeps the production withdrawal unit choices consistent", async () => {
   assert.match(source, /PRODUCTION_UNIT_CODES = \["KG", "G", "COUNT"\]/);
   assert.match(source, /aria-label="وحدة سحب مكون التصنيع"/);
   assert.match(source, /disabled=\{!compatible\}/);
+  assert.match(source, /preferredCode.*=== "mass" \? "G" : "COUNT"/);
+  assert.match(source, /الأوزان تُحفظ بالجرام/);
 });
