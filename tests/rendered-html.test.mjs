@@ -51,3 +51,11 @@ test("keeps the production withdrawal unit choices consistent", async () => {
   assert.match(source, /preferredCode.*=== "mass" \? "G" : "COUNT"/);
   assert.match(source, /الأوزان تُحفظ بالجرام/);
 });
+
+test("shows main and kitchen balances together and refreshes the current kitchen balance", async () => {
+  const source = await readFile(new URL("../src/features/app/RestaurantFlowApp.tsx", import.meta.url), "utf8");
+  assert.match(source, /<th>رصيد المخزن<\/th><th>رصيد المطبخ<\/th>/);
+  assert.match(source, /<th>الرصيد الحالي<\/th>/);
+  assert.match(source, /currentWarehouseId=\{kitchen\?\.id\}/);
+  assert.match(source, /displayQuantity\(data, item, currentBalance\)/);
+});
