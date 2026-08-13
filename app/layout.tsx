@@ -1,11 +1,18 @@
 import type { Metadata } from "next";
-import { Cairo } from "next/font/google";
+import { Changa, Tajawal } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals.css";
 
-const cairo = Cairo({
-  variable: "--font-cairo",
+const tajawal = Tajawal({
+  variable: "--font-tajawal",
   subsets: ["arabic", "latin"],
+  weight: ["400", "500", "700", "800"],
+});
+
+const changa = Changa({
+  variable: "--font-changa",
+  subsets: ["arabic", "latin"],
+  weight: ["500", "600", "700", "800"],
 });
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -38,7 +45,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ar" dir="rtl">
-      <body className={`${cairo.variable} antialiased`}>{children}</body>
+      <body className={`${tajawal.variable} ${changa.variable} antialiased`}>{children}</body>
     </html>
   );
 }
