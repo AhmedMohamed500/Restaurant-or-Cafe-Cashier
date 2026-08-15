@@ -20,12 +20,11 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; background: var(--canvas); color: var(--ink); }
-body { font-family: var(--font-tajawal), "Segoe UI", sans-serif; font-weight: 500; }
-button, input, select { font: inherit; }
+body { font-family: Tahoma, Arial, sans-serif; font-size: 12px; font-weight: 700; }
+body * { font-family: Tahoma, Arial, sans-serif; font-weight: 700 !important; }
+button, input, select, textarea { font-family: Tahoma, Arial, sans-serif; font-size: 12px; font-weight: 700; }
 button { cursor: pointer; }
-h1, h2, h3, .brand strong, .btn, .nav button, .stat strong, .product-price, .total-line.grand, .receipt-grand, .stock-number {
-  font-family: var(--font-changa), var(--font-tajawal), sans-serif;
-}
+small, .badge, th, .eyebrow, .nav-label, .product-category { font-size: 11px; }
 
 .app-shell {
   min-height: 100vh; display: grid; grid-template-columns: 286px minmax(0, 1fr);

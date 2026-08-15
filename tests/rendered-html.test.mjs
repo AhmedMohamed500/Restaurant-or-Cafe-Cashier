@@ -68,11 +68,11 @@ test("uses the warm restaurant red brand palette", async () => {
   assert.doesNotMatch(css, /--brand: #3b82f6/);
 });
 
-test("uses cashier-friendly Arabic typography", async () => {
+test("uses the requested Tahoma bold cashier typography", async () => {
   const layout = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  assert.match(layout, /import \{ Changa, Tajawal \} from "next\/font\/google"/);
-  assert.match(css, /font-family: var\(--font-tajawal\)/);
-  assert.match(css, /font-family: var\(--font-changa\)/);
-  assert.doesNotMatch(css, /--font-cairo/);
+  assert.doesNotMatch(layout, /next\/font\/google/);
+  assert.match(css, /font-family: Tahoma, Arial, sans-serif; font-size: 12px; font-weight: 700/);
+  assert.match(css, /small, \.badge, th, \.eyebrow, \.nav-label, \.product-category \{ font-size: 11px; \}/);
+  assert.doesNotMatch(css, /--font-(?:cairo|tajawal|changa)/);
 });
