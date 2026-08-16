@@ -41,6 +41,9 @@ test("includes restaurant branding and local login flows", async () => {
   assert.match(source, /إعدادات المطعم/);
   assert.match(source, /شعار المطعم/);
   assert.match(source, /hashPassword/);
+  assert.match(source, /نسيت اسم المستخدم أو كلمة المرور؟/);
+  assert.match(source, /لن تُحذف أي مواد أو أرصدة أو وصفات أو فواتير/);
+  assert.match(source, /db\.settings\.update\("settings", \{ username, passwordHash: await hashPassword\(password\) \}\)/);
 });
 
 test("keeps the production withdrawal unit choices consistent", async () => {

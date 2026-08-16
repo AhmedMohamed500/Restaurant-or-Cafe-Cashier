@@ -126,7 +126,7 @@ export function RestaurantFlowApp() {
 
   if (!ready) return <div className="loading"><div className="loading-card"><div className="loader" /><strong>جاري تجهيز RestaurantFlow</strong><p className="page-sub">تحميل دورة التشغيل…</p></div></div>;
   if (!data.settings?.passwordHash) return <AccountSetup onDone={async () => { sessionStorage.setItem(AUTH_SESSION_KEY, "1"); setAuthenticated(true); await refresh(); }} />;
-  if (!authenticated) return <LoginScreen settings={data.settings} onSuccess={() => { sessionStorage.setItem(AUTH_SESSION_KEY, "1"); setAuthenticated(true); }} />;
+  if (!authenticated) return <LoginScreen settings={data.settings} onSuccess={async () => { sessionStorage.setItem(AUTH_SESSION_KEY, "1"); setAuthenticated(true); await refresh(); }} />;
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><BrandLogo settings={data.settings} /><div><strong>{data.settings?.restaurantName ?? "RestaurantFlow"}</strong><small>SMART RESTAURANT OS</small></div></div>
@@ -179,15 +179,27 @@ function AccountSetup({ onDone }: { onDone: () => void }) {
   return <div className="auth-shell"><section className="auth-card"><div className="auth-brand"><BrandLogo settings={{ id: "settings", language: "ar", theme: "light", seeded: false, activeShift: true, restaurantName: "RestaurantFlow", logoDataUrl }} large /><div><span>إعداد مجاني لأول مرة</span><h1>جهّز حساب مطعمك</h1><p>أدخل اسم المطعم وشعاره وبيانات الدخول. تُحفظ على هذا الجهاز فقط.</p></div></div><form onSubmit={submit}>{error && <div className="form-error">{error}</div>}<div className="form-grid"><Field label="اسم المطعم" full><input name="restaurantName" required placeholder="مثال: مطعم السعادة" /></Field><Field label="اسم المستخدم"><input name="username" autoComplete="username" required placeholder="admin" /></Field><Field label="شعار المطعم (اختياري)"><label className="compact-upload"><input type="file" accept="image/png,image/jpeg,image/webp" onChange={chooseLogo} />{busy ? "جارٍ تجهيز الشعار…" : "رفع صورة الشعار"}</label></Field><Field label="كلمة المرور"><input name="password" type="password" autoComplete="new-password" minLength={6} required /></Field><Field label="تأكيد كلمة المرور"><input name="confirm" type="password" autoComplete="new-password" minLength={6} required /></Field></div><button className="btn primary auth-submit" type="submit">حفظ وفتح النظام</button></form><p className="auth-note">لا توجد اشتراكات أو خدمات مدفوعة. الحماية محلية لهذا المتصفح والجهاز.</p></section></div>;
 }
 
-function LoginScreen({ settings, onSuccess }: { settings: AppSettings; onSuccess: () => void }) {
+function LoginScreen({ settings, onSuccess }: { settings: AppSettings; onSuccess: () => void | Promise<void> }) {
   const [error, setError] = useState("");
+  const [recovering, setRecovering] = useState(false);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const form = new FormData(event.currentTarget);
     const username = String(form.get("username")).trim(); const password = String(form.get("password"));
     if (username !== settings.username || await hashPassword(password) !== settings.passwordHash) return setError("اسم المستخدم أو كلمة المرور غير صحيحة");
-    onSuccess();
+    await onSuccess();
   };
-  return <div className="auth-shell"><section className="auth-card login-card"><div className="auth-brand login-brand"><BrandLogo settings={settings} large /><div><span>مرحبًا بعودتك</span><h1>{settings.restaurantName}</h1><p>سجّل الدخول لإدارة المخزون والتصنيع والكاشير.</p></div></div><form onSubmit={submit}>{error && <div className="form-error">{error}</div>}<div className="form-grid one-column"><Field label="اسم المستخدم" full><input name="username" autoComplete="username" required autoFocus /></Field><Field label="كلمة المرور" full><input name="password" type="password" autoComplete="current-password" required /></Field></div><button className="btn primary auth-submit" type="submit">دخول إلى النظام</button></form><p className="auth-note">بيانات الدخول خاصة بهذا المتصفح. مسح بيانات الموقع يعيد الإعداد من البداية.</p></section></div>;
+  const recover = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const form = new FormData(event.currentTarget);
+    const restaurantName = String(form.get("restaurantName")).trim(); const username = String(form.get("newUsername")).trim();
+    const password = String(form.get("newPassword")); const confirm = String(form.get("newConfirm"));
+    if (restaurantName !== settings.restaurantName?.trim()) return setError("اسم المطعم غير مطابق للاسم المسجل على هذا الجهاز");
+    if (username.length < 3) return setError("اسم المستخدم الجديد يجب أن يكون 3 أحرف على الأقل");
+    if (password.length < 6) return setError("كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل");
+    if (password !== confirm) return setError("تأكيد كلمة المرور الجديدة غير مطابق");
+    await db.settings.update("settings", { username, passwordHash: await hashPassword(password) });
+    await onSuccess();
+  };
+  return <div className="auth-shell"><section className="auth-card login-card"><div className="auth-brand login-brand"><BrandLogo settings={settings} large /><div><span>{recovering ? "استرداد محلي آمن" : "مرحبًا بعودتك"}</span><h1>{settings.restaurantName}</h1><p>{recovering ? "عيّن اسم مستخدم وكلمة مرور جديدين دون حذف بيانات المطعم." : "سجّل الدخول لإدارة المخزون والتصنيع والكاشير."}</p></div></div>{recovering ? <form onSubmit={recover}>{error && <div className="form-error">{error}</div>}<div className="form-grid one-column"><Field label="اكتب اسم المطعم للتأكيد" full><input name="restaurantName" autoComplete="organization" required autoFocus /></Field><Field label="اسم المستخدم الجديد" full><input name="newUsername" autoComplete="username" minLength={3} required /></Field><Field label="كلمة المرور الجديدة" full><input name="newPassword" type="password" autoComplete="new-password" minLength={6} required /></Field><Field label="تأكيد كلمة المرور الجديدة" full><input name="newConfirm" type="password" autoComplete="new-password" minLength={6} required /></Field></div><div className="auth-recovery-actions"><button className="btn primary" type="submit">حفظ بيانات الدخول الجديدة</button><button className="btn" type="button" onClick={() => { setRecovering(false); setError(""); }}>العودة لتسجيل الدخول</button></div><p className="local-security-note">لن تُحذف أي مواد أو أرصدة أو وصفات أو فواتير. الاسترداد متاح فقط من نفس المتصفح الذي يحتوي على بيانات المطعم.</p></form> : <form onSubmit={submit}>{error && <div className="form-error">{error}</div>}<div className="form-grid one-column"><Field label="اسم المستخدم" full><input name="username" autoComplete="username" required autoFocus /></Field><Field label="كلمة المرور" full><input name="password" type="password" autoComplete="current-password" required /></Field></div><button className="btn primary auth-submit" type="submit">دخول إلى النظام</button><button className="auth-forgot" type="button" onClick={() => { setRecovering(true); setError(""); }}>نسيت اسم المستخدم أو كلمة المرور؟</button></form>}<p className="auth-note">بيانات الدخول خاصة بهذا المتصفح. الاسترداد المحلي يغير بيانات الدخول فقط ولا يمس بيانات التشغيل.</p></section></div>;
 }
 
 const guideContent: Record<Section, { title: string; bullets: string[]; action: string }> = {
