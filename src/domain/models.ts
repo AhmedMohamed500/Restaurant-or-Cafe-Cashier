@@ -140,6 +140,7 @@ export interface SaleOrder extends AuditFields {
   totalPiasters: number;
   paymentMethod: "cash" | "card" | "wallet";
   status: "paid";
+  shiftId?: EntityId;
 }
 
 export type ExpenseCategory = "supplies" | "utilities" | "rent" | "maintenance" | "marketing" | "delivery" | "other";
@@ -285,10 +286,50 @@ export interface CashierShift extends AuditFields {
   walletSalesPiasters: number;
   cashRefundsPiasters: number;
   cashPaidOutsPiasters: number;
+  cashInPiasters?: number;
+  cashOutPiasters?: number;
+  orderCount?: number;
+  vatPiasters?: number;
+  notes?: string;
   expectedCashPiasters: number;
   actualCashPiasters?: number;
   differencePiasters?: number;
   status: "open" | "closed";
+  differenceStatus?: "balanced" | "shortage" | "surplus";
+}
+
+export interface ShiftCashMovement extends AuditFields {
+  id: EntityId; shiftId: EntityId; number: string; type: "cash_in" | "cash_out";
+  amountPiasters: number; reason: string; occurredAt: string;
+}
+
+export interface StockCount extends AuditFields {
+  id: EntityId; number: string; warehouseId: EntityId; countDate: string;
+  status: "draft" | "in_progress" | "reviewed" | "approved"; notes?: string; approvedAt?: string;
+}
+
+export interface StockCountLine {
+  id: EntityId; stockCountId: EntityId; itemId: EntityId; unitId: EntityId;
+  systemQuantity: number; actualQuantity?: number; differenceQuantity: number;
+  unitCostPiasters: number; differenceValuePiasters: number;
+}
+
+export type WasteReason = "burned" | "spoiled" | "expired" | "dropped" | "overproduction" | "preparation" | "damaged" | "other";
+export interface WasteEntry extends AuditFields {
+  id: EntityId; number: string; occurredAt: string; warehouseId: EntityId; itemId: EntityId;
+  quantity: number; enteredQuantity: number; unitId: EntityId; reason: WasteReason;
+  unitCostPiasters: number; totalCostPiasters: number; shiftId?: EntityId; notes?: string;
+}
+
+export interface AuditLog {
+  id: EntityId; action: string; entityType: string; entityId: EntityId; reference: string;
+  timestamp: string; localUser: string; beforeSummary?: string; afterSummary?: string;
+}
+
+export interface OperationalAlert {
+  id: EntityId; type: "low_stock" | "stock_variance" | "waste" | "shift_shortage" | "out_of_stock" | "negative_margin" | "ingredient_shortage";
+  severity: "info" | "warning" | "critical"; title: string; message: string; entityId?: EntityId;
+  createdAt: string; resolvedAt?: string;
 }
 
 export interface Employee extends AuditFields {

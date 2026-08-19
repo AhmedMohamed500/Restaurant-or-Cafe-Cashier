@@ -125,3 +125,7 @@
 - الأموال بالقروش كأعداد صحيحة.
 - الكميات مقربة إلى ثلاث منازل عشرية.
 - التحويل يتم بواسطة `(quantity × fromFactor) ÷ toFactor` داخل نفس عائلة الوحدة.
+
+## الإصدار 5 — الرقابة التشغيلية
+
+أضيفت جداول `shiftCashMovements` و`stockCounts` و`stockCountLines` و`wasteEntries` و`auditLogs` و`alerts` دون حذف البيانات السابقة. أضيف فهرس `shiftId` إلى المبيعات لربط كل طلب بورديته.

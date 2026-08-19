@@ -174,7 +174,7 @@ export async function executeProduction(input: {
   sourceWarehouseId?: string;
   targetWarehouseId?: string;
 }) {
-  return db.transaction("rw", [db.units, db.recipes, db.items, db.warehouses, db.balances, db.movements, db.productionOrders, db.accounts, db.journalEntries, db.journalLines], async () => {
+  return db.transaction("rw", [db.units, db.recipes, db.items, db.warehouses, db.balances, db.movements, db.productionOrders, db.accounts, db.journalEntries, db.journalLines, db.auditLogs], async () => {
     const recipe = await db.recipes.get(input.recipeId);
     if (!recipe) throw new Error("أمر التصنيع غير موجود");
     const normalizedIngredients = await normalizeRecipeIngredientsToGrams(recipe.ingredients);
@@ -251,14 +251,16 @@ export async function executeProduction(input: {
     };
     await db.productionOrders.put(order);
     await postProductionOrder(order.id, order.number, totalCost);
+    await db.auditLogs.add({id:uid(),action:"production_complete",entityType:"production",entityId:order.id,reference:order.number,timestamp,localUser:actor,afterSummary:`quantity=${actualQuantity};cost=${totalCost}`});
     return order;
   });
 }
 
 export async function completeSale(order: Omit<SaleOrder, "id" | "number" | "status" | "createdAt" | "updatedAt" | "createdBy">) {
-  return db.transaction("rw", [db.settings, db.saleOrders, db.items, db.warehouses, db.balances, db.movements, db.accounts, db.journalEntries, db.journalLines], async () => {
+  return db.transaction("rw", [db.settings, db.shifts, db.saleOrders, db.items, db.warehouses, db.balances, db.movements, db.accounts, db.journalEntries, db.journalLines, db.auditLogs], async () => {
     const settings = await db.settings.get("settings");
-    if (!settings?.activeShift) throw new Error("يجب فتح وردية قبل تسجيل المبيعات");
+    const shift = await db.shifts.where("status").equals("open").first();
+    if (!settings?.activeShift || !shift) throw new Error("يجب فتح وردية قبل تسجيل المبيعات");
     const finishedWarehouse = await activeWarehouse("finished");
     const reference = `INV-${Date.now().toString().slice(-8)}`;
     const timestamp = now();
@@ -280,10 +282,11 @@ export async function completeSale(order: Omit<SaleOrder, "id" | "number" | "sta
       });
     }
     await db.movements.bulkPut(movements);
-    const sale: SaleOrder = { ...order, id: uid(), number: reference, status: "paid", createdAt: timestamp, updatedAt: timestamp, createdBy: "local-cashier" };
+    const sale: SaleOrder = { ...order, id: uid(), number: reference, shiftId: shift.id, status: "paid", createdAt: timestamp, updatedAt: timestamp, createdBy: "local-cashier" };
     await db.saleOrders.put(sale);
     const cogsPiasters = movements.reduce((sum, movement) => sum + Math.abs(movement.totalCostPiasters), 0);
     await postSaleOrder(sale.id, sale.number, sale.subtotalPiasters, sale.taxPiasters, sale.totalPiasters, cogsPiasters, sale.paymentMethod);
+    await db.auditLogs.add({id:uid(),action:"sale_complete",entityType:"sale",entityId:sale.id,reference:sale.number,timestamp,localUser:"local-cashier",afterSummary:`total=${sale.totalPiasters};shift=${shift.number}`});
     return sale;
   });
 }

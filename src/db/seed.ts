@@ -19,7 +19,7 @@ const systemWarehouses = [
 export async function ensureEmptyWorkspace() {
   await db.transaction(
     "rw",
-    [db.units, db.warehouses, db.recipes, db.settings],
+    [db.units, db.warehouses, db.recipes, db.shifts, db.settings],
     async () => {
       const timestamp = new Date().toISOString();
       for (const unit of systemUnits) {
@@ -48,7 +48,8 @@ export async function ensureEmptyWorkspace() {
         });
       }
       const settings = await db.settings.get("settings");
-      await db.settings.put({ ...settings, id: "settings", language: settings?.language ?? "ar", theme: settings?.theme ?? "light", seeded: false, activeShift: settings?.activeShift ?? true });
+      const openShift = await db.shifts.where("status").equals("open").first();
+      await db.settings.put({ ...settings, id: "settings", language: settings?.language ?? "ar", theme: settings?.theme ?? "light", seeded: false, activeShift: Boolean(openShift) });
     },
   );
 }
@@ -56,7 +57,7 @@ export async function ensureEmptyWorkspace() {
 export async function resetAllData() {
   await db.transaction(
     "rw",
-    [db.units, db.items, db.warehouses, db.balances, db.recipes, db.movements, db.productionOrders, db.saleOrders, db.expenses, db.employees, db.attendanceRecords, db.payrollRecords, db.accounts, db.journalEntries, db.journalLines, db.suppliers, db.purchaseInvoices, db.purchaseInvoiceLines, db.supplierPayments, db.cashAccounts, db.cashTransfers, db.shifts],
+    [db.units, db.items, db.warehouses, db.balances, db.recipes, db.movements, db.productionOrders, db.saleOrders, db.expenses, db.employees, db.attendanceRecords, db.payrollRecords, db.accounts, db.journalEntries, db.journalLines, db.suppliers, db.purchaseInvoices, db.purchaseInvoiceLines, db.supplierPayments, db.cashAccounts, db.cashTransfers, db.shifts, db.shiftCashMovements, db.stockCounts, db.stockCountLines, db.wasteEntries, db.auditLogs, db.alerts],
     async () => {
       await Promise.all([
         db.units.clear(),
@@ -81,6 +82,12 @@ export async function resetAllData() {
         db.cashAccounts.clear(),
         db.cashTransfers.clear(),
         db.shifts.clear(),
+        db.shiftCashMovements.clear(),
+        db.stockCounts.clear(),
+        db.stockCountLines.clear(),
+        db.wasteEntries.clear(),
+        db.auditLogs.clear(),
+        db.alerts.clear(),
       ]);
     },
   );

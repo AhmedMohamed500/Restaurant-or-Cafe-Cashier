@@ -20,6 +20,12 @@ import type {
   RestaurantExpense,
   Supplier,
   SupplierPayment,
+  ShiftCashMovement,
+  StockCount,
+  StockCountLine,
+  WasteEntry,
+  AuditLog,
+  OperationalAlert,
   SaleOrder,
   StockBalance,
   StockMovement,
@@ -50,6 +56,12 @@ export class RestaurantFlowDatabase extends Dexie {
   cashAccounts!: EntityTable<CashAccount, "id">;
   cashTransfers!: EntityTable<CashTransfer, "id">;
   shifts!: EntityTable<CashierShift, "id">;
+  shiftCashMovements!: EntityTable<ShiftCashMovement, "id">;
+  stockCounts!: EntityTable<StockCount, "id">;
+  stockCountLines!: EntityTable<StockCountLine, "id">;
+  wasteEntries!: EntityTable<WasteEntry, "id">;
+  auditLogs!: EntityTable<AuditLog, "id">;
+  alerts!: EntityTable<OperationalAlert, "id">;
   settings!: EntityTable<AppSettings, "id">;
 
   constructor() {
@@ -121,6 +133,37 @@ export class RestaurantFlowDatabase extends Dexie {
       cashAccounts: "id, &code, type, ledgerAccountId, active",
       cashTransfers: "id, &number, date, fromCashAccountId, toCashAccountId",
       shifts: "id, &number, cashier, openedAt, status",
+      settings: "id",
+    });
+    this.version(5).stores({
+      units: "id, code, family, active",
+      items: "id, code, nameAr, category, stage, active",
+      warehouses: "id, code, stage, active",
+      balances: "id, [warehouseId+itemId], warehouseId, itemId",
+      recipes: "id, code, outputItemId, active",
+      movements: "id, warehouseId, itemId, type, reference, createdAt, sourceWarehouseId, destinationWarehouseId",
+      productionOrders: "id, number, recipeId, createdAt",
+      saleOrders: "id, number, createdAt, paymentMethod, shiftId",
+      expenses: "id, category, expenseDate, paymentMethod, accountId, paidFromAccountId, createdAt",
+      employees: "id, code, name, role, status",
+      attendanceRecords: "id, employeeId, workDate, status",
+      payrollRecords: "id, employeeId, month, status",
+      accounts: "id, &code, parentId, type, active, system",
+      journalEntries: "id, &entryNumber, [referenceType+referenceId], referenceType, referenceId, referenceNumber, date, status",
+      journalLines: "id, journalEntryId, accountId, sourceModule",
+      suppliers: "id, &code, name, active",
+      purchaseInvoices: "id, &invoiceNumber, supplierId, warehouseId, date, kind, paymentType, status",
+      purchaseInvoiceLines: "id, purchaseInvoiceId, itemId",
+      supplierPayments: "id, supplierId, date, paymentAccountId",
+      cashAccounts: "id, &code, type, ledgerAccountId, active",
+      cashTransfers: "id, &number, date, fromCashAccountId, toCashAccountId",
+      shifts: "id, &number, cashier, openedAt, status",
+      shiftCashMovements: "id, &number, shiftId, type, occurredAt",
+      stockCounts: "id, &number, warehouseId, countDate, status",
+      stockCountLines: "id, stockCountId, itemId",
+      wasteEntries: "id, &number, warehouseId, itemId, reason, occurredAt, shiftId",
+      auditLogs: "id, action, entityType, entityId, reference, timestamp",
+      alerts: "id, type, severity, entityId, createdAt, resolvedAt",
       settings: "id",
     });
   }
