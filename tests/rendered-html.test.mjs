@@ -79,3 +79,15 @@ test("uses the requested Tahoma bold cashier typography", async () => {
   assert.match(css, /small, \.badge, th, \.eyebrow, \.nav-label, \.product-category \{ font-size: 11px; \}/);
   assert.doesNotMatch(css, /--font-(?:cairo|tajawal|changa)/);
 });
+
+test("includes restaurant accounts and human resources modules", async () => {
+  const app = await readFile(new URL("../src/features/app/RestaurantFlowApp.tsx", import.meta.url), "utf8");
+  const database = await readFile(new URL("../src/db/database.ts", import.meta.url), "utf8");
+  for (const label of ["الحسابات", "إجمالي المبيعات", "تكلفة المبيعات", "صافي الربح", "الموارد البشرية", "الحضور والانصراف", "مسير الرواتب", "الخصومات والسلف"]) {
+    assert.match(app, new RegExp(label));
+  }
+  assert.match(database, /this\.version\(3\)/);
+  for (const table of ["expenses", "employees", "attendanceRecords", "payrollRecords"]) {
+    assert.match(database, new RegExp(`${table}!: EntityTable`));
+  }
+});

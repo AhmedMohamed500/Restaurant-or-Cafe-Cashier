@@ -142,6 +142,52 @@ export interface SaleOrder extends AuditFields {
   status: "paid";
 }
 
+export type ExpenseCategory = "supplies" | "utilities" | "rent" | "maintenance" | "marketing" | "delivery" | "other";
+
+export interface RestaurantExpense extends AuditFields {
+  id: EntityId;
+  category: ExpenseCategory;
+  description: string;
+  amountPiasters: number;
+  paymentMethod: "cash" | "card" | "wallet";
+  expenseDate: string;
+}
+
+export interface Employee extends AuditFields {
+  id: EntityId;
+  code: string;
+  name: string;
+  role: string;
+  phone?: string;
+  baseSalaryPiasters: number;
+  hireDate: string;
+  status: "active" | "inactive";
+}
+
+export interface AttendanceRecord extends AuditFields {
+  id: EntityId;
+  employeeId: EntityId;
+  workDate: string;
+  status: "present" | "absent" | "leave";
+  checkIn?: string;
+  checkOut?: string;
+  overtimeHours: number;
+}
+
+export interface PayrollRecord extends AuditFields {
+  id: EntityId;
+  employeeId: EntityId;
+  month: string;
+  baseSalaryPiasters: number;
+  overtimePiasters: number;
+  bonusPiasters: number;
+  deductionPiasters: number;
+  advancePiasters: number;
+  netPiasters: number;
+  status: "pending" | "paid";
+  paidAt?: string;
+}
+
 export interface AppSettings {
   id: "settings";
   language: "ar" | "en";

@@ -220,6 +220,19 @@ tr:last-child td { border-bottom: 0; }
 .ingredient-row > span { color: var(--brand-dark); font-size: 11px; font-weight: 800; }
 
 .ledger { margin-top: 18px; }
+.management-label { margin-top: 18px; }
+.management-nav button { min-height: 50px; }
+.accounts-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, .8fr); gap: 18px; align-items: start; }
+.payment-summary { display: grid; gap: 10px; padding: 20px; }
+.payment-summary > div, .account-result { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: #f8fafc; }
+.payment-summary span, .account-result span { color: var(--muted); }
+.payment-summary strong, .account-result strong { color: var(--ink); font-size: 15px; }
+.account-result { margin: 0 20px 10px; }
+.account-result.net { color: #147a50; background: #effbf5; border-color: #c9edda; }
+.account-result.net strong { color: #147a50; font-size: 18px; }
+.account-result.net.loss { color: var(--danger); background: #fff2f2; border-color: #f2caca; }
+.account-result.net.loss strong { color: var(--danger); }
+.hr-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 16px; }
 .kitchen-cards { padding: 20px; }
 .card-note { margin: 13px 0 0 !important; padding-top: 11px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 10px !important; line-height: 1.7; }
 .finished-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
@@ -322,7 +335,7 @@ tr:last-child td { border-bottom: 0; }
   .top-actions .chip:not(.shift-chip) { display: none; }
   .content { padding: 20px 14px 90px; }
   .page-head { align-items: flex-start; flex-direction: column; }
-  .stats, .cards, .grid-2 { grid-template-columns: 1fr; }
+  .stats, .cards, .grid-2, .accounts-grid { grid-template-columns: 1fr; }
   .pos-layout { grid-template-columns: 1fr; }
   .cart { position: static; }
   .product-grid { grid-template-columns: repeat(2, 1fr); }

@@ -5,20 +5,27 @@ import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent, typ
 import { db } from "@/src/db/database";
 import { ensureEmptyWorkspace, resetAllData } from "@/src/db/seed";
 import { addOpeningStock, completeSale, executeProduction, saveProductionDefinition, transferToKitchen } from "@/src/domain/inventory-service";
-import type { AppSettings, InventoryItem, OrderItem, ProductionOrder, Recipe, SaleOrder, StockBalance, StockMovement, UnitOfMeasure, Warehouse } from "@/src/domain/models";
+import type { AppSettings, AttendanceRecord, Employee, InventoryItem, OrderItem, PayrollRecord, ProductionOrder, Recipe, RestaurantExpense, SaleOrder, StockBalance, StockMovement, UnitOfMeasure, Warehouse } from "@/src/domain/models";
 import { formatMoney, formatQuantity } from "@/src/lib/money";
 import { hashPassword } from "@/src/lib/auth";
 
-type Section = "inventory" | "kitchen" | "production" | "finished" | "pos";
-type ModalName = "receipt" | "transfer" | "production" | "settings" | null;
+type WorkflowSection = "inventory" | "kitchen" | "production" | "finished" | "pos";
+type Section = WorkflowSection | "accounts" | "hr";
+type ModalName = "receipt" | "transfer" | "production" | "settings" | "expense" | "employee" | "attendance" | "payroll" | null;
 
-const navItems: { id: Section; icon: string; label: string; eyebrow: string; description: string }[] = [
+const navItems: { id: WorkflowSection; icon: string; label: string; eyebrow: string; description: string }[] = [
   { id: "inventory", icon: "▦", label: "المخزون", eyebrow: "الخطوة 1 من 5", description: "أضف مشترياتك إلى المخزن الرئيسي بوحدتها وتكلفتها الفعلية." },
   { id: "kitchen", icon: "⇄", label: "المطبخ", eyebrow: "الخطوة 2 من 5", description: "حوّل المواد من المخزن إلى المطبخ لتصبح جاهزة للتصنيع." },
   { id: "production", icon: "⚙", label: "التصنيع", eyebrow: "الخطوة 3 من 5", description: "استهلك مواد المطبخ وأنتج منتجًا تامًا في عملية ذرية واحدة." },
   { id: "finished", icon: "✓", label: "المنتج التام", eyebrow: "الخطوة 4 من 5", description: "راجع المنتجات الجاهزة وتكلفتها وربحها وسعر بيعها." },
   { id: "pos", icon: "▤", label: "الكاشير", eyebrow: "الخطوة 5 من 5", description: "بع من رصيد المنتج التام فقط واطبع إيصال العميل." },
 ];
+
+const managementItems: { id: Section; icon: string; label: string; eyebrow: string; description: string }[] = [
+  { id: "accounts", icon: "ج", label: "الحسابات", eyebrow: "الإدارة المالية", description: "تابع المبيعات وتكلفة المبيعات والمصروفات والربحية وطرق التحصيل." },
+  { id: "hr", icon: "♟", label: "الموارد البشرية", eyebrow: "إدارة فريق العمل", description: "سجّل الموظفين والحضور والانصراف والرواتب والسلف والخصومات." },
+];
+const allNavItems = [...navItems, ...managementItems];
 
 const movementLabels: Record<string, string> = {
   opening: "رصيد قديم", purchase: "مشتريات", stock_receipt: "إذن إضافة",
@@ -35,10 +42,15 @@ interface AppData {
   recipes: Recipe[];
   movements: StockMovement[];
   productionOrders: ProductionOrder[];
+  saleOrders: SaleOrder[];
+  expenses: RestaurantExpense[];
+  employees: Employee[];
+  attendanceRecords: AttendanceRecord[];
+  payrollRecords: PayrollRecord[];
   settings?: AppSettings;
 }
 
-const emptyData: AppData = { units: [], items: [], warehouses: [], balances: [], recipes: [], movements: [], productionOrders: [] };
+const emptyData: AppData = { units: [], items: [], warehouses: [], balances: [], recipes: [], movements: [], productionOrders: [], saleOrders: [], expenses: [], employees: [], attendanceRecords: [], payrollRecords: [] };
 const AUTH_SESSION_KEY = "restaurantflow-authenticated";
 const PRODUCTION_UNIT_CODES = ["KG", "G", "COUNT"] as const;
 
@@ -97,11 +109,13 @@ export function RestaurantFlowApp() {
     setToast({ text, error }); window.setTimeout(() => setToast(null), 3800);
   }, []);
   const refresh = useCallback(async () => {
-    const [units, items, warehouses, balances, recipes, movements, productionOrders, settings] = await Promise.all([
+    const [units, items, warehouses, balances, recipes, movements, productionOrders, saleOrders, expenses, employees, attendanceRecords, payrollRecords, settings] = await Promise.all([
       db.units.toArray(), db.items.toArray(), db.warehouses.toArray(), db.balances.toArray(), db.recipes.toArray(),
-      db.movements.orderBy("createdAt").reverse().toArray(), db.productionOrders.orderBy("createdAt").reverse().toArray(), db.settings.get("settings"),
+      db.movements.orderBy("createdAt").reverse().toArray(), db.productionOrders.orderBy("createdAt").reverse().toArray(),
+      db.saleOrders.orderBy("createdAt").reverse().toArray(), db.expenses.orderBy("expenseDate").reverse().toArray(),
+      db.employees.toArray(), db.attendanceRecords.orderBy("workDate").reverse().toArray(), db.payrollRecords.orderBy("month").reverse().toArray(), db.settings.get("settings"),
     ]);
-    setData({ units, items, warehouses, balances, recipes, movements, productionOrders, settings });
+    setData({ units, items, warehouses, balances, recipes, movements, productionOrders, saleOrders, expenses, employees, attendanceRecords, payrollRecords, settings });
   }, []);
   useEffect(() => {
     ensureEmptyWorkspace().then(refresh).then(async () => {
@@ -111,14 +125,15 @@ export function RestaurantFlowApp() {
     }).catch((error) => notify(error.message, true));
   }, [notify, refresh]);
 
-  const activeNav = navItems.find((item) => item.id === section)!;
-  const goNext = () => setSection(navItems[Math.min(navItems.length - 1, navItems.findIndex((item) => item.id === section) + 1)].id);
+  const activeNav = allNavItems.find((item) => item.id === section)!;
+  const isWorkflowSection = navItems.some((item) => item.id === section);
+  const goNext = () => { const index = navItems.findIndex((item) => item.id === section); if (index >= 0) setSection(navItems[Math.min(navItems.length - 1, index + 1)].id); };
   const reset = async () => {
     if (!window.confirm("سيتم حذف جميع بيانات المطعم نهائيًا. هل تريد المتابعة؟")) return;
     await resetAllData(); await ensureEmptyWorkspace(); await refresh(); setCart([]); setSection("inventory"); notify("تمت إعادة النظام إلى بداية دورة التشغيل");
   };
   const exportBackup = async () => {
-    const payload = { version: 2, exportedAt: new Date().toISOString(), units: await db.units.toArray(), items: await db.items.toArray(), warehouses: await db.warehouses.toArray(), balances: await db.balances.toArray(), recipes: await db.recipes.toArray(), movements: await db.movements.toArray(), productionOrders: await db.productionOrders.toArray(), saleOrders: await db.saleOrders.toArray() };
+    const payload = { version: 3, exportedAt: new Date().toISOString(), units: await db.units.toArray(), items: await db.items.toArray(), warehouses: await db.warehouses.toArray(), balances: await db.balances.toArray(), recipes: await db.recipes.toArray(), movements: await db.movements.toArray(), productionOrders: await db.productionOrders.toArray(), saleOrders: await db.saleOrders.toArray(), expenses: await db.expenses.toArray(), employees: await db.employees.toArray(), attendanceRecords: await db.attendanceRecords.toArray(), payrollRecords: await db.payrollRecords.toArray() };
     const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = `restaurantflow-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url); notify("تم تصدير النسخة الاحتياطية");
   };
@@ -132,26 +147,34 @@ export function RestaurantFlowApp() {
       <div className="brand"><BrandLogo settings={data.settings} /><div><strong>{data.settings?.restaurantName ?? "RestaurantFlow"}</strong><small>SMART RESTAURANT OS</small></div></div>
       <div className="nav-label">دورة التشغيل</div>
       <nav className="nav" aria-label="التنقل الرئيسي">{navItems.map((item, index) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}><span>{item.icon}</span><span><small>{index + 1}</small>{item.label}</span></button>)}</nav>
+      <div className="nav-label management-label">الإدارة</div>
+      <nav className="nav management-nav" aria-label="أقسام الإدارة">{managementItems.map((item) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}><span>{item.icon}</span><span>{item.label}</span></button>)}</nav>
       <div className="user-card"><div className="avatar">{data.settings?.username?.slice(0, 1).toUpperCase()}</div><div><strong>{data.settings?.username}</strong><small>مدير النظام</small></div></div>
     </aside>
     <main className="main">
       <header className="topbar"><div className="branch"><span className="branch-dot" /><div><strong>{data.settings?.restaurantName}</strong><small>الفرع الرئيسي · البيانات محفوظة محليًا</small></div></div><div className="top-actions"><button className="chip" onClick={() => setModal("settings")}>⚙ إعدادات المطعم</button><button className="chip" onClick={exportBackup}>↓ نسخة احتياطية</button><button className="chip" onClick={reset}>⌫ مسح البيانات</button><button className="chip danger" onClick={logout}>خروج</button><span className="chip shift-chip">● وردية مفتوحة</span></div></header>
       <div className="content">
-        <div className="flow-steps" aria-label="المخزون ثم المطبخ ثم التصنيع ثم المنتج التام ثم الكاشير">{navItems.map((item, index) => <span key={item.id} style={{ display: "contents" }}><button className={`flow-step ${navItems.findIndex((entry) => entry.id === section) >= index ? "done" : ""}`} onClick={() => setSection(item.id)}><b>{index + 1}</b>{item.label}</button>{index < navItems.length - 1 && <span className="flow-arrow">←</span>}</span>)}</div>
-        <div className="page-head"><div><p className="eyebrow">{activeNav.eyebrow}</p><h1>{activeNav.label}</h1><p className="page-sub">{activeNav.description}</p></div><div className="head-actions">{section === "inventory" && <button className="btn primary" onClick={() => setModal("receipt")}>＋ إذن إضافة</button>}{section === "kitchen" && <button className="btn primary" onClick={() => setModal("transfer")}>⇄ تحويل إلى المطبخ</button>}{section === "production" && <button className="btn primary" onClick={() => setModal("production")}>⚙ أمر تصنيع</button>}</div></div>
-        <StepGuide section={section} onNext={goNext} />
+        {isWorkflowSection && <div className="flow-steps" aria-label="المخزون ثم المطبخ ثم التصنيع ثم المنتج التام ثم الكاشير">{navItems.map((item, index) => <span key={item.id} style={{ display: "contents" }}><button className={`flow-step ${navItems.findIndex((entry) => entry.id === section) >= index ? "done" : ""}`} onClick={() => setSection(item.id)}><b>{index + 1}</b>{item.label}</button>{index < navItems.length - 1 && <span className="flow-arrow">←</span>}</span>)}</div>}
+        <div className="page-head"><div><p className="eyebrow">{activeNav.eyebrow}</p><h1>{activeNav.label}</h1><p className="page-sub">{activeNav.description}</p></div><div className="head-actions">{section === "inventory" && <button className="btn primary" onClick={() => setModal("receipt")}>＋ إذن إضافة</button>}{section === "kitchen" && <button className="btn primary" onClick={() => setModal("transfer")}>⇄ تحويل إلى المطبخ</button>}{section === "production" && <button className="btn primary" onClick={() => setModal("production")}>⚙ أمر تصنيع</button>}{section === "accounts" && <button className="btn primary" onClick={() => setModal("expense")}>＋ تسجيل مصروف</button>}{section === "hr" && <><button className="btn" onClick={() => setModal("payroll")}>ج إعداد راتب</button><button className="btn" onClick={() => setModal("attendance")}>◷ حضور وانصراف</button><button className="btn primary" onClick={() => setModal("employee")}>＋ موظف جديد</button></>}</div></div>
+        {isWorkflowSection && <StepGuide section={section as WorkflowSection} onNext={goNext} />}
         {section === "inventory" && <InventoryView data={data} />}
         {section === "kitchen" && <KitchenView data={data} />}
         {section === "production" && <ProductionView data={data} />}
         {section === "finished" && <FinishedView data={data} refresh={refresh} notify={notify} />}
         {section === "pos" && <PosView data={data} cart={cart} setCart={setCart} payment={payment} setPayment={setPayment} refresh={refresh} notify={notify} />}
+        {section === "accounts" && <AccountsView data={data} />}
+        {section === "hr" && <HumanResourcesView data={data} />}
       </div>
     </main>
-    {modal && <Modal title={modal === "receipt" ? "إذن إضافة إلى المخزون" : modal === "transfer" ? "تحويل إلى المطبخ" : modal === "production" ? "أمر تصنيع منتج تام" : "إعدادات المطعم والدخول"} onClose={() => setModal(null)}>
+    {modal && <Modal title={modal === "receipt" ? "إذن إضافة إلى المخزون" : modal === "transfer" ? "تحويل إلى المطبخ" : modal === "production" ? "أمر تصنيع منتج تام" : modal === "expense" ? "تسجيل مصروف مطعم" : modal === "employee" ? "إضافة موظف" : modal === "attendance" ? "تسجيل حضور وانصراف" : modal === "payroll" ? "إعداد راتب موظف" : "إعدادات المطعم والدخول"} onClose={() => setModal(null)}>
       {modal === "receipt" && <StockReceiptForm data={data} onDone={async () => { setModal(null); await refresh(); notify("تم تنفيذ إذن الإضافة وتحديث المخزون"); }} />}
       {modal === "transfer" && <KitchenTransferForm data={data} onDone={async () => { setModal(null); await refresh(); notify("تم التحويل إلى المطبخ بحركتين مرتبطتين"); }} />}
       {modal === "production" && <ProductionForm data={data} onDone={async (order) => { setModal(null); await refresh(); notify(`اكتمل ${order.number} بتكلفة ${formatMoney(order.totalCostPiasters)}`); }} />}
       {modal === "settings" && <RestaurantSettingsForm settings={data.settings} onDone={async () => { setModal(null); await refresh(); notify("تم تحديث اسم المطعم والشعار وبيانات الدخول"); }} />}
+      {modal === "expense" && <ExpenseForm onDone={async () => { setModal(null); await refresh(); notify("تم تسجيل المصروف في الحسابات"); }} />}
+      {modal === "employee" && <EmployeeForm onDone={async () => { setModal(null); await refresh(); notify("تمت إضافة الموظف"); }} />}
+      {modal === "attendance" && <AttendanceForm employees={data.employees} onDone={async () => { setModal(null); await refresh(); notify("تم تسجيل الحضور والانصراف"); }} />}
+      {modal === "payroll" && <PayrollForm employees={data.employees} onDone={async () => { setModal(null); await refresh(); notify("تم حفظ مسير الراتب"); }} />}
     </Modal>}
     {toast && <div className={`toast ${toast.error ? "error" : ""}`}>{toast.error ? "⚠ " : "✓ "}{toast.text}</div>}
   </div>;
@@ -202,14 +225,14 @@ function LoginScreen({ settings, onSuccess }: { settings: AppSettings; onSuccess
   return <div className="auth-shell"><section className="auth-card login-card"><div className="auth-brand login-brand"><BrandLogo settings={settings} large /><div><span>{recovering ? "استرداد محلي آمن" : "مرحبًا بعودتك"}</span><h1>{settings.restaurantName}</h1><p>{recovering ? "عيّن اسم مستخدم وكلمة مرور جديدين دون حذف بيانات المطعم." : "سجّل الدخول لإدارة المخزون والتصنيع والكاشير."}</p></div></div>{recovering ? <form onSubmit={recover}>{error && <div className="form-error">{error}</div>}<div className="form-grid one-column"><Field label="اكتب اسم المطعم للتأكيد" full><input name="restaurantName" autoComplete="organization" required autoFocus /></Field><Field label="اسم المستخدم الجديد" full><input name="newUsername" autoComplete="username" minLength={3} required /></Field><Field label="كلمة المرور الجديدة" full><input name="newPassword" type="password" autoComplete="new-password" minLength={6} required /></Field><Field label="تأكيد كلمة المرور الجديدة" full><input name="newConfirm" type="password" autoComplete="new-password" minLength={6} required /></Field></div><div className="auth-recovery-actions"><button className="btn primary" type="submit">حفظ بيانات الدخول الجديدة</button><button className="btn" type="button" onClick={() => { setRecovering(false); setError(""); }}>العودة لتسجيل الدخول</button></div><p className="local-security-note">لن تُحذف أي مواد أو أرصدة أو وصفات أو فواتير. الاسترداد متاح فقط من نفس المتصفح الذي يحتوي على بيانات المطعم.</p></form> : <form onSubmit={submit}>{error && <div className="form-error">{error}</div>}<div className="form-grid one-column"><Field label="اسم المستخدم" full><input name="username" autoComplete="username" required autoFocus /></Field><Field label="كلمة المرور" full><input name="password" type="password" autoComplete="current-password" required /></Field></div><button className="btn primary auth-submit" type="submit">دخول إلى النظام</button><button className="auth-forgot" type="button" onClick={() => { setRecovering(true); setError(""); }}>نسيت اسم المستخدم أو كلمة المرور؟</button></form>}<p className="auth-note">بيانات الدخول خاصة بهذا المتصفح. الاسترداد المحلي يغير بيانات الدخول فقط ولا يمس بيانات التشغيل.</p></section></div>;
 }
 
-const guideContent: Record<Section, { title: string; bullets: string[]; action: string }> = {
+const guideContent: Record<WorkflowSection, { title: string; bullets: string[]; action: string }> = {
   inventory: { title: "سجّل ما اشتريته أو استلمته", bullets: ["اختر الوحدة داخل الإذن", "أدخل التكلفة والمرجع", "الرصيد يتغير بحركة مسجلة"], action: "بعد الإضافة انتقل إلى المطبخ" },
   kitchen: { title: "جهّز مواد التشغيل", bullets: ["اختر من رصيد المخزن", "حوّل بالجرام أو الكيلوجرام", "الكمية تنتقل ولا تتكرر"], action: "بعد التحويل انتقل للتصنيع" },
   production: { title: "صنّع من رصيد المطبخ فقط", bullets: ["حدد المنتج والمكونات", "راجع الكميات المتاحة", "الناتج يذهب للمنتج التام"], action: "راجع المنتج التام" },
   finished: { title: "راجع الجاهز للبيع", bullets: ["الرصيد ناتج من التصنيع", "عدّل سعر البيع فقط", "تابع التكلفة وهامش الربح"], action: "افتح الكاشير" },
   pos: { title: "حصّل الطلب من الرصيد الجاهز", bullets: ["أضف المنتج بضغطة", "لا بيع فوق الرصيد", "اطبع إيصال 80mm"], action: "ابدأ طلبًا جديدًا" },
 };
-function StepGuide({ section, onNext }: { section: Section; onNext: () => void }) {
+function StepGuide({ section, onNext }: { section: WorkflowSection; onNext: () => void }) {
   const guide = guideContent[section]; const step = navItems.findIndex((item) => item.id === section) + 1;
   return <section className="guide"><div className="guide-number">الخطوة {step}</div><div className="guide-copy"><span>ماذا أفعل الآن؟</span><h2>{guide.title}</h2><p>{navItems[step - 1].description}</p></div><div className="guide-checks">{guide.bullets.map((bullet) => <div key={bullet}><b>✓</b>{bullet}</div>)}</div>{section !== "pos" && <button className="btn guide-action" onClick={onNext}>{guide.action} ←</button>}</section>;
 }
@@ -262,6 +285,46 @@ function PosView({ data, cart, setCart, payment, setPayment, refresh, notify }: 
   const subtotal = cart.reduce((sum, line) => sum + line.quantity * line.unitPricePiasters, 0); const tax = Math.round(subtotal * 0.14);
   const checkout = async () => { if (!cart.length) return; try { const sale = await completeSale({ type: "takeaway", items: cart, subtotalPiasters: subtotal, taxPiasters: tax, totalPiasters: subtotal + tax, paymentMethod: payment }); setReceipt(sale); setCart([]); await refresh(); notify(`تم تحصيل ${sale.number}`); } catch (error) { notify(error instanceof Error ? error.message : "تعذر إتمام الطلب", true); } };
   return <><div className="pos-layout"><div><div className="toolbar"><div className="search"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث عن منتج أو امسح الباركود…" /></div><span className="filter">منتجات تامة فقط</span></div>{products.length ? <div className="product-grid">{products.map((product, index) => { const quantity = available(product.id); return <button className="product" key={product.id} disabled={quantity <= 0} onClick={() => add(product)}><div className="product-visual"><ItemImage item={product} fallback={["🍕", "🍝", "☕", "🥪"][index % 4]} large /></div><div className="product-title-row"><span className="product-category">{product.category}</span><span className={`badge ${quantity > 0 ? "green" : "amber"}`}>{quantity > 0 ? `متاح ${formatQuantity(quantity)}` : "غير متاح"}</span></div><strong>{product.nameAr}</strong><span className="product-price">{formatMoney(product.salePricePiasters ?? 0)}</span></button>; })}</div> : <div className="panel"><Empty icon="5" title="الكاشير ينتظر المنتج التام" text="صنّع منتجًا وحدد سعره ليظهر هنا. المواد الخام لا تظهر في الكاشير." /></div>}</div><div className="panel cart"><div className="panel-head"><div><h2>الطلب الحالي</h2><small>تيك أواي · طلب جديد</small></div><span className="badge green">{cart.reduce((sum, line) => sum + line.quantity, 0)} قطعة</span></div>{cart.length ? <div className="cart-list">{cart.map((line) => <div className="cart-row" key={line.id}><div><strong>{line.name}</strong><small>{formatMoney(line.unitPricePiasters)} × {line.quantity}</small><div className="qty"><button onClick={() => changeQty(line.id, -1)}>−</button><b>{line.quantity}</b><button onClick={() => changeQty(line.id, 1)}>＋</button></div></div><strong>{formatMoney(line.unitPricePiasters * line.quantity)}</strong></div>)}</div> : <Empty icon="▤" title="الطلب فارغ" text="اضغط على منتج متاح لإضافته." />}<div className="cart-total"><div className="total-line"><span>الإجمالي الفرعي</span><strong>{formatMoney(subtotal)}</strong></div><div className="total-line"><span>الضريبة 14%</span><strong>{formatMoney(tax)}</strong></div><div className="total-line grand"><span>الإجمالي</span><strong>{formatMoney(subtotal + tax)}</strong></div><div className="pay-methods">{(["cash", "card", "wallet"] as const).map((value) => <button key={value} className={payment === value ? "active" : ""} onClick={() => setPayment(value)}>{value === "cash" ? "نقدي" : value === "card" ? "بطاقة" : "محفظة"}</button>)}</div><button className="btn primary checkout" disabled={!cart.length} onClick={checkout}>تحصيل {formatMoney(subtotal + tax)}</button></div></div></div>{receipt && <ReceiptDialog sale={receipt} onClose={() => setReceipt(null)} />}</>;
+}
+
+const expenseLabels: Record<RestaurantExpense["category"], string> = { supplies: "مستلزمات تشغيل", utilities: "مرافق", rent: "إيجار", maintenance: "صيانة", marketing: "تسويق", delivery: "توصيل", other: "أخرى" };
+const paymentLabels: Record<RestaurantExpense["paymentMethod"], string> = { cash: "نقدي", card: "بطاقة", wallet: "محفظة" };
+const attendanceLabels: Record<AttendanceRecord["status"], string> = { present: "حاضر", absent: "غائب", leave: "إجازة" };
+
+function AccountsView({ data }: { data: AppData }) {
+  const sales = data.saleOrders.reduce((sum, order) => sum + order.totalPiasters, 0);
+  const tax = data.saleOrders.reduce((sum, order) => sum + order.taxPiasters, 0);
+  const costOfSales = data.saleOrders.reduce((sum, order) => sum + order.items.reduce((itemSum, item) => itemSum + item.costPiasters * item.quantity, 0), 0);
+  const expenses = data.expenses.reduce((sum, expense) => sum + expense.amountPiasters, 0);
+  const netProfit = sales - tax - costOfSales - expenses;
+  return <><div className="stats"><Stat label="إجمالي المبيعات" value={formatMoney(sales)} hint={`${data.saleOrders.length} فاتورة مدفوعة`} icon="ج" /><Stat label="تكلفة المبيعات" value={formatMoney(costOfSales)} hint="من تكلفة المنتجات المباعة" icon="∑" /><Stat label="مصروفات التشغيل" value={formatMoney(expenses)} hint={`${data.expenses.length} مصروف مسجل`} icon="−" /><Stat label="صافي الربح" value={formatMoney(netProfit)} hint="بعد الضريبة والتكلفة والمصروفات" icon="=" /></div><div className="accounts-grid"><section className="panel"><div className="panel-head"><div><h2>المصروفات</h2><small>إيجار ومرافق وصيانة وتسويق ومستلزمات المطعم</small></div></div>{data.expenses.length ? <div className="table-wrap"><table><thead><tr><th>التاريخ</th><th>البيان</th><th>التصنيف</th><th>طريقة الدفع</th><th>القيمة</th></tr></thead><tbody>{data.expenses.map((expense) => <tr key={expense.id}><td>{new Date(expense.expenseDate).toLocaleDateString("ar-EG")}</td><td><strong>{expense.description}</strong></td><td><span className="badge">{expenseLabels[expense.category]}</span></td><td>{paymentLabels[expense.paymentMethod]}</td><td><strong>{formatMoney(expense.amountPiasters)}</strong></td></tr>)}</tbody></table></div> : <Empty icon="ج" title="لا توجد مصروفات" text="سجّل أول مصروف ليظهر في صافي الربح." />}</section><section className="panel"><div className="panel-head"><div><h2>التحصيل حسب طريقة الدفع</h2><small>قراءة مباشرة من فواتير الكاشير</small></div></div><div className="payment-summary">{(["cash", "card", "wallet"] as const).map((method) => <div key={method}><span>{paymentLabels[method]}</span><strong>{formatMoney(data.saleOrders.filter((order) => order.paymentMethod === method).reduce((sum, order) => sum + order.totalPiasters, 0))}</strong></div>)}</div><div className="account-result"><span>ضريبة المبيعات</span><strong>{formatMoney(tax)}</strong></div><div className={`account-result net ${netProfit < 0 ? "loss" : ""}`}><span>صافي النتيجة</span><strong>{formatMoney(netProfit)}</strong></div></section></div></>;
+}
+
+function HumanResourcesView({ data }: { data: AppData }) {
+  const today = new Date().toISOString().slice(0, 10); const month = today.slice(0, 7);
+  const monthlyPayroll = data.payrollRecords.filter((record) => record.month === month).reduce((sum, record) => sum + record.netPiasters, 0);
+  return <><div className="stats"><Stat label="الموظفون النشطون" value={String(data.employees.filter((employee) => employee.status === "active").length)} hint="فريق العمل الحالي" icon="♟" /><Stat label="الحاضرون اليوم" value={String(data.attendanceRecords.filter((record) => record.workDate === today && record.status === "present").length)} hint="سجل اليوم" icon="✓" /><Stat label="رواتب الشهر" value={formatMoney(monthlyPayroll)} hint={month} icon="ج" /><Stat label="رواتب معلقة" value={String(data.payrollRecords.filter((record) => record.status === "pending").length)} hint="لم يتم صرفها" icon="!" /></div><section className="panel"><div className="panel-head"><div><h2>دليل الموظفين</h2><small>الوظائف والهواتف والرواتب الأساسية</small></div><span className="badge green">{data.employees.length} موظف</span></div>{data.employees.length ? <div className="table-wrap"><table><thead><tr><th>الكود</th><th>الموظف</th><th>الوظيفة</th><th>الهاتف</th><th>الراتب الأساسي</th><th>تاريخ التعيين</th><th>الحالة</th></tr></thead><tbody>{data.employees.map((employee) => <tr key={employee.id}><td>{employee.code}</td><td><strong>{employee.name}</strong></td><td>{employee.role}</td><td>{employee.phone || "—"}</td><td>{formatMoney(employee.baseSalaryPiasters)}</td><td>{new Date(employee.hireDate).toLocaleDateString("ar-EG")}</td><td><span className={`badge ${employee.status === "active" ? "green" : "amber"}`}>{employee.status === "active" ? "نشط" : "غير نشط"}</span></td></tr>)}</tbody></table></div> : <Empty icon="♟" title="لا يوجد موظفون" text="أضف أفراد فريق المطعم لتسجيل الحضور والرواتب." />}</section><div className="accounts-grid"><section className="panel"><div className="panel-head"><div><h2>آخر الحضور والانصراف</h2><small>الحضور والغياب والإجازات</small></div></div>{data.attendanceRecords.length ? <div className="table-wrap"><table><thead><tr><th>التاريخ</th><th>الموظف</th><th>الحالة</th><th>الدخول</th><th>الخروج</th><th>إضافي</th></tr></thead><tbody>{data.attendanceRecords.slice(0, 12).map((record) => <tr key={record.id}><td>{record.workDate}</td><td><strong>{data.employees.find((employee) => employee.id === record.employeeId)?.name}</strong></td><td><span className={`badge ${record.status === "present" ? "green" : "amber"}`}>{attendanceLabels[record.status]}</span></td><td>{record.checkIn || "—"}</td><td>{record.checkOut || "—"}</td><td>{record.overtimeHours} س</td></tr>)}</tbody></table></div> : <Empty icon="◷" title="لا يوجد سجل حضور" text="سجّل حضور أو غياب أول موظف." />}</section><section className="panel"><div className="panel-head"><div><h2>مسير الرواتب</h2><small>الصافي بعد الإضافي والمكافآت والخصومات والسلف</small></div></div>{data.payrollRecords.length ? <div className="table-wrap"><table><thead><tr><th>الشهر</th><th>الموظف</th><th>الأساسي</th><th>الخصومات والسلف</th><th>الصافي</th><th>الحالة</th></tr></thead><tbody>{data.payrollRecords.slice(0, 12).map((record) => <tr key={record.id}><td>{record.month}</td><td><strong>{data.employees.find((employee) => employee.id === record.employeeId)?.name}</strong></td><td>{formatMoney(record.baseSalaryPiasters)}</td><td>{formatMoney(record.deductionPiasters + record.advancePiasters)}</td><td><strong>{formatMoney(record.netPiasters)}</strong></td><td><span className={`badge ${record.status === "paid" ? "green" : "amber"}`}>{record.status === "paid" ? "مدفوع" : "معلق"}</span></td></tr>)}</tbody></table></div> : <Empty icon="ج" title="لا توجد رواتب" text="أنشئ أول مسير راتب بعد إضافة الموظفين." />}</section></div></>;
+}
+
+function auditFields() { const now = new Date().toISOString(); return { createdAt: now, updatedAt: now, createdBy: "local-admin" }; }
+function ExpenseForm({ onDone }: { onDone: () => void }) {
+  const [error, setError] = useState(""); const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const form = new FormData(event.currentTarget); try { await db.expenses.add({ id: crypto.randomUUID(), category: String(form.get("category")) as RestaurantExpense["category"], description: String(form.get("description")).trim(), amountPiasters: Math.round(Number(form.get("amount")) * 100), paymentMethod: String(form.get("paymentMethod")) as RestaurantExpense["paymentMethod"], expenseDate: String(form.get("expenseDate")), ...auditFields() }); onDone(); } catch { setError("تعذر تسجيل المصروف. راجع البيانات."); } };
+  return <FormShell error={error} onSubmit={submit} submitLabel="تسجيل المصروف"><Field label="بيان المصروف" full><input name="description" required placeholder="مثال: فاتورة كهرباء" /></Field><Field label="التصنيف"><select name="category">{Object.entries(expenseLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field><Field label="القيمة بالجنيه"><input name="amount" type="number" min="0.01" step="0.01" required /></Field><Field label="طريقة الدفع"><select name="paymentMethod"><option value="cash">نقدي</option><option value="card">بطاقة</option><option value="wallet">محفظة</option></select></Field><Field label="تاريخ المصروف"><input name="expenseDate" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></Field></FormShell>;
+}
+
+function EmployeeForm({ onDone }: { onDone: () => void }) {
+  const [error, setError] = useState(""); const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const form = new FormData(event.currentTarget); try { const code = String(form.get("code")).trim(); if (await db.employees.where("code").equals(code).first()) return setError("كود الموظف مستخدم بالفعل"); await db.employees.add({ id: crypto.randomUUID(), code, name: String(form.get("name")).trim(), role: String(form.get("role")).trim(), phone: String(form.get("phone")).trim() || undefined, baseSalaryPiasters: Math.round(Number(form.get("salary")) * 100), hireDate: String(form.get("hireDate")), status: "active", ...auditFields() }); onDone(); } catch { setError("تعذر إضافة الموظف. راجع البيانات."); } };
+  return <FormShell error={error} onSubmit={submit} submitLabel="إضافة الموظف"><Field label="اسم الموظف"><input name="name" required /></Field><Field label="كود الموظف"><input name="code" required placeholder="EMP-001" /></Field><Field label="الوظيفة"><input name="role" required placeholder="كاشير، شيف، ويتر…" /></Field><Field label="رقم الهاتف"><input name="phone" inputMode="tel" /></Field><Field label="الراتب الأساسي بالجنيه"><input name="salary" type="number" min="0" step="0.01" required /></Field><Field label="تاريخ التعيين"><input name="hireDate" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></Field></FormShell>;
+}
+
+function AttendanceForm({ employees, onDone }: { employees: Employee[]; onDone: () => void }) {
+  const active = employees.filter((employee) => employee.status === "active"); const [error, setError] = useState(""); const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const form = new FormData(event.currentTarget); try { if (!active.length) return setError("أضف موظفًا أولًا"); await db.attendanceRecords.add({ id: crypto.randomUUID(), employeeId: String(form.get("employeeId")), workDate: String(form.get("workDate")), status: String(form.get("status")) as AttendanceRecord["status"], checkIn: String(form.get("checkIn")) || undefined, checkOut: String(form.get("checkOut")) || undefined, overtimeHours: Number(form.get("overtimeHours")) || 0, ...auditFields() }); onDone(); } catch { setError("تعذر تسجيل الحضور والانصراف"); } };
+  return <FormShell error={error} onSubmit={submit} submitLabel="حفظ سجل الحضور"><Field label="الموظف" full><select name="employeeId" required><option value="">اختر الموظف</option>{active.map((employee) => <option key={employee.id} value={employee.id}>{employee.name} — {employee.role}</option>)}</select></Field><Field label="التاريخ"><input name="workDate" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></Field><Field label="الحالة"><select name="status"><option value="present">حاضر</option><option value="absent">غائب</option><option value="leave">إجازة</option></select></Field><Field label="وقت الدخول"><input name="checkIn" type="time" /></Field><Field label="وقت الخروج"><input name="checkOut" type="time" /></Field><Field label="ساعات إضافية"><input name="overtimeHours" type="number" min="0" step="0.5" defaultValue="0" /></Field></FormShell>;
+}
+
+function PayrollForm({ employees, onDone }: { employees: Employee[]; onDone: () => void }) {
+  const active = employees.filter((employee) => employee.status === "active"); const [error, setError] = useState(""); const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const form = new FormData(event.currentTarget); try { const employee = active.find((entry) => entry.id === String(form.get("employeeId"))); if (!employee) return setError("اختر موظفًا صحيحًا"); const overtime = Math.round(Number(form.get("overtime")) * 100), bonus = Math.round(Number(form.get("bonus")) * 100), deduction = Math.round(Number(form.get("deduction")) * 100), advance = Math.round(Number(form.get("advance")) * 100); const status = String(form.get("status")) as PayrollRecord["status"]; await db.payrollRecords.add({ id: crypto.randomUUID(), employeeId: employee.id, month: String(form.get("month")), baseSalaryPiasters: employee.baseSalaryPiasters, overtimePiasters: overtime, bonusPiasters: bonus, deductionPiasters: deduction, advancePiasters: advance, netPiasters: employee.baseSalaryPiasters + overtime + bonus - deduction - advance, status, paidAt: status === "paid" ? new Date().toISOString() : undefined, ...auditFields() }); onDone(); } catch { setError("تعذر حفظ مسير الراتب"); } };
+  return <FormShell error={error} onSubmit={submit} submitLabel="حفظ مسير الراتب"><Field label="الموظف" full><select name="employeeId" required><option value="">اختر الموظف</option>{active.map((employee) => <option key={employee.id} value={employee.id}>{employee.name} — راتب {formatMoney(employee.baseSalaryPiasters)}</option>)}</select></Field><Field label="شهر الاستحقاق"><input name="month" type="month" defaultValue={new Date().toISOString().slice(0, 7)} required /></Field><Field label="إضافي بالجنيه"><input name="overtime" type="number" min="0" step="0.01" defaultValue="0" /></Field><Field label="مكافآت بالجنيه"><input name="bonus" type="number" min="0" step="0.01" defaultValue="0" /></Field><Field label="خصومات بالجنيه"><input name="deduction" type="number" min="0" step="0.01" defaultValue="0" /></Field><Field label="سلف بالجنيه"><input name="advance" type="number" min="0" step="0.01" defaultValue="0" /></Field><Field label="حالة الصرف"><select name="status"><option value="pending">معلق</option><option value="paid">مدفوع</option></select></Field></FormShell>;
 }
 
 function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) { return <div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="modal wide"><div className="modal-head"><h2>{title}</h2><button className="close" onClick={onClose}>×</button></div>{children}</div></div>; }
