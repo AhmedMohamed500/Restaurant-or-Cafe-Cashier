@@ -4,10 +4,12 @@ import Image from "next/image";
 import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { db } from "@/src/db/database";
 import { ensureEmptyWorkspace, resetAllData } from "@/src/db/seed";
+import { ensureDefaultAccountingSetup } from "@/src/domain/accounting-service";
 import { addOpeningStock, completeSale, executeProduction, saveProductionDefinition, transferToKitchen } from "@/src/domain/inventory-service";
-import type { AppSettings, AttendanceRecord, Employee, InventoryItem, OrderItem, PayrollRecord, ProductionOrder, Recipe, RestaurantExpense, SaleOrder, StockBalance, StockMovement, UnitOfMeasure, Warehouse } from "@/src/domain/models";
+import type { AccountingAccount, AppSettings, AttendanceRecord, CashAccount, CashierShift, CashTransfer, Employee, InventoryItem, JournalEntry, JournalLine, OrderItem, PayrollRecord, ProductionOrder, PurchaseInvoice, PurchaseInvoiceLine, Recipe, RestaurantExpense, SaleOrder, StockBalance, StockMovement, Supplier, SupplierPayment, UnitOfMeasure, Warehouse } from "@/src/domain/models";
 import { formatMoney, formatQuantity } from "@/src/lib/money";
 import { hashPassword } from "@/src/lib/auth";
+import { FinanceModule } from "@/src/features/finance/FinanceModule";
 
 type WorkflowSection = "inventory" | "kitchen" | "production" | "finished" | "pos";
 type Section = WorkflowSection | "accounts" | "hr";
@@ -47,10 +49,20 @@ interface AppData {
   employees: Employee[];
   attendanceRecords: AttendanceRecord[];
   payrollRecords: PayrollRecord[];
+  accounts: AccountingAccount[];
+  journalEntries: JournalEntry[];
+  journalLines: JournalLine[];
+  suppliers: Supplier[];
+  purchaseInvoices: PurchaseInvoice[];
+  purchaseInvoiceLines: PurchaseInvoiceLine[];
+  supplierPayments: SupplierPayment[];
+  cashAccounts: CashAccount[];
+  cashTransfers: CashTransfer[];
+  shifts: CashierShift[];
   settings?: AppSettings;
 }
 
-const emptyData: AppData = { units: [], items: [], warehouses: [], balances: [], recipes: [], movements: [], productionOrders: [], saleOrders: [], expenses: [], employees: [], attendanceRecords: [], payrollRecords: [] };
+const emptyData: AppData = { units: [], items: [], warehouses: [], balances: [], recipes: [], movements: [], productionOrders: [], saleOrders: [], expenses: [], employees: [], attendanceRecords: [], payrollRecords: [], accounts: [], journalEntries: [], journalLines: [], suppliers: [], purchaseInvoices: [], purchaseInvoiceLines: [], supplierPayments: [], cashAccounts: [], cashTransfers: [], shifts: [] };
 const AUTH_SESSION_KEY = "restaurantflow-authenticated";
 const PRODUCTION_UNIT_CODES = ["KG", "G", "COUNT"] as const;
 
@@ -109,16 +121,17 @@ export function RestaurantFlowApp() {
     setToast({ text, error }); window.setTimeout(() => setToast(null), 3800);
   }, []);
   const refresh = useCallback(async () => {
-    const [units, items, warehouses, balances, recipes, movements, productionOrders, saleOrders, expenses, employees, attendanceRecords, payrollRecords, settings] = await Promise.all([
+    const [units, items, warehouses, balances, recipes, movements, productionOrders, saleOrders, expenses, employees, attendanceRecords, payrollRecords, accounts, journalEntries, journalLines, suppliers, purchaseInvoices, purchaseInvoiceLines, supplierPayments, cashAccounts, cashTransfers, shifts, settings] = await Promise.all([
       db.units.toArray(), db.items.toArray(), db.warehouses.toArray(), db.balances.toArray(), db.recipes.toArray(),
       db.movements.orderBy("createdAt").reverse().toArray(), db.productionOrders.orderBy("createdAt").reverse().toArray(),
       db.saleOrders.orderBy("createdAt").reverse().toArray(), db.expenses.orderBy("expenseDate").reverse().toArray(),
-      db.employees.toArray(), db.attendanceRecords.orderBy("workDate").reverse().toArray(), db.payrollRecords.orderBy("month").reverse().toArray(), db.settings.get("settings"),
+      db.employees.toArray(), db.attendanceRecords.orderBy("workDate").reverse().toArray(), db.payrollRecords.orderBy("month").reverse().toArray(),
+      db.accounts.orderBy("code").toArray(), db.journalEntries.orderBy("date").reverse().toArray(), db.journalLines.toArray(), db.suppliers.orderBy("name").toArray(), db.purchaseInvoices.orderBy("date").reverse().toArray(), db.purchaseInvoiceLines.toArray(), db.supplierPayments.orderBy("date").reverse().toArray(), db.cashAccounts.toArray(), db.cashTransfers.orderBy("date").reverse().toArray(), db.shifts.orderBy("openedAt").reverse().toArray(), db.settings.get("settings"),
     ]);
-    setData({ units, items, warehouses, balances, recipes, movements, productionOrders, saleOrders, expenses, employees, attendanceRecords, payrollRecords, settings });
+    setData({ units, items, warehouses, balances, recipes, movements, productionOrders, saleOrders, expenses, employees, attendanceRecords, payrollRecords, accounts, journalEntries, journalLines, suppliers, purchaseInvoices, purchaseInvoiceLines, supplierPayments, cashAccounts, cashTransfers, shifts, settings });
   }, []);
   useEffect(() => {
-    ensureEmptyWorkspace().then(refresh).then(async () => {
+    ensureEmptyWorkspace().then(ensureDefaultAccountingSetup).then(refresh).then(async () => {
       const settings = await db.settings.get("settings");
       setAuthenticated(Boolean(settings?.passwordHash && sessionStorage.getItem(AUTH_SESSION_KEY) === "1"));
       setReady(true);
@@ -130,10 +143,10 @@ export function RestaurantFlowApp() {
   const goNext = () => { const index = navItems.findIndex((item) => item.id === section); if (index >= 0) setSection(navItems[Math.min(navItems.length - 1, index + 1)].id); };
   const reset = async () => {
     if (!window.confirm("سيتم حذف جميع بيانات المطعم نهائيًا. هل تريد المتابعة؟")) return;
-    await resetAllData(); await ensureEmptyWorkspace(); await refresh(); setCart([]); setSection("inventory"); notify("تمت إعادة النظام إلى بداية دورة التشغيل");
+    await resetAllData(); await ensureEmptyWorkspace(); await ensureDefaultAccountingSetup(); await refresh(); setCart([]); setSection("inventory"); notify("تمت إعادة النظام إلى بداية دورة التشغيل");
   };
   const exportBackup = async () => {
-    const payload = { version: 3, exportedAt: new Date().toISOString(), units: await db.units.toArray(), items: await db.items.toArray(), warehouses: await db.warehouses.toArray(), balances: await db.balances.toArray(), recipes: await db.recipes.toArray(), movements: await db.movements.toArray(), productionOrders: await db.productionOrders.toArray(), saleOrders: await db.saleOrders.toArray(), expenses: await db.expenses.toArray(), employees: await db.employees.toArray(), attendanceRecords: await db.attendanceRecords.toArray(), payrollRecords: await db.payrollRecords.toArray() };
+    const payload = { version: 4, exportedAt: new Date().toISOString(), units: await db.units.toArray(), items: await db.items.toArray(), warehouses: await db.warehouses.toArray(), balances: await db.balances.toArray(), recipes: await db.recipes.toArray(), movements: await db.movements.toArray(), productionOrders: await db.productionOrders.toArray(), saleOrders: await db.saleOrders.toArray(), expenses: await db.expenses.toArray(), employees: await db.employees.toArray(), attendanceRecords: await db.attendanceRecords.toArray(), payrollRecords: await db.payrollRecords.toArray(), accounts: await db.accounts.toArray(), journalEntries: await db.journalEntries.toArray(), journalLines: await db.journalLines.toArray(), suppliers: await db.suppliers.toArray(), purchaseInvoices: await db.purchaseInvoices.toArray(), purchaseInvoiceLines: await db.purchaseInvoiceLines.toArray(), supplierPayments: await db.supplierPayments.toArray(), cashAccounts: await db.cashAccounts.toArray(), cashTransfers: await db.cashTransfers.toArray(), shifts: await db.shifts.toArray() };
     const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = `restaurantflow-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url); notify("تم تصدير النسخة الاحتياطية");
   };
@@ -155,14 +168,14 @@ export function RestaurantFlowApp() {
       <header className="topbar"><div className="branch"><span className="branch-dot" /><div><strong>{data.settings?.restaurantName}</strong><small>الفرع الرئيسي · البيانات محفوظة محليًا</small></div></div><div className="top-actions"><button className="chip" onClick={() => setModal("settings")}>⚙ إعدادات المطعم</button><button className="chip" onClick={exportBackup}>↓ نسخة احتياطية</button><button className="chip" onClick={reset}>⌫ مسح البيانات</button><button className="chip danger" onClick={logout}>خروج</button><span className="chip shift-chip">● وردية مفتوحة</span></div></header>
       <div className="content">
         {isWorkflowSection && <div className="flow-steps" aria-label="المخزون ثم المطبخ ثم التصنيع ثم المنتج التام ثم الكاشير">{navItems.map((item, index) => <span key={item.id} style={{ display: "contents" }}><button className={`flow-step ${navItems.findIndex((entry) => entry.id === section) >= index ? "done" : ""}`} onClick={() => setSection(item.id)}><b>{index + 1}</b>{item.label}</button>{index < navItems.length - 1 && <span className="flow-arrow">←</span>}</span>)}</div>}
-        <div className="page-head"><div><p className="eyebrow">{activeNav.eyebrow}</p><h1>{activeNav.label}</h1><p className="page-sub">{activeNav.description}</p></div><div className="head-actions">{section === "inventory" && <button className="btn primary" onClick={() => setModal("receipt")}>＋ إذن إضافة</button>}{section === "kitchen" && <button className="btn primary" onClick={() => setModal("transfer")}>⇄ تحويل إلى المطبخ</button>}{section === "production" && <button className="btn primary" onClick={() => setModal("production")}>⚙ أمر تصنيع</button>}{section === "accounts" && <button className="btn primary" onClick={() => setModal("expense")}>＋ تسجيل مصروف</button>}{section === "hr" && <><button className="btn" onClick={() => setModal("payroll")}>ج إعداد راتب</button><button className="btn" onClick={() => setModal("attendance")}>◷ حضور وانصراف</button><button className="btn primary" onClick={() => setModal("employee")}>＋ موظف جديد</button></>}</div></div>
+        <div className="page-head"><div><p className="eyebrow">{activeNav.eyebrow}</p><h1>{activeNav.label}</h1><p className="page-sub">{activeNav.description}</p></div><div className="head-actions">{section === "inventory" && <button className="btn primary" onClick={() => setModal("receipt")}>＋ إذن إضافة</button>}{section === "kitchen" && <button className="btn primary" onClick={() => setModal("transfer")}>⇄ تحويل إلى المطبخ</button>}{section === "production" && <button className="btn primary" onClick={() => setModal("production")}>⚙ أمر تصنيع</button>}{section === "hr" && <><button className="btn" onClick={() => setModal("payroll")}>ج إعداد راتب</button><button className="btn" onClick={() => setModal("attendance")}>◷ حضور وانصراف</button><button className="btn primary" onClick={() => setModal("employee")}>＋ موظف جديد</button></>}</div></div>
         {isWorkflowSection && <StepGuide section={section as WorkflowSection} onNext={goNext} />}
         {section === "inventory" && <InventoryView data={data} />}
         {section === "kitchen" && <KitchenView data={data} />}
         {section === "production" && <ProductionView data={data} />}
         {section === "finished" && <FinishedView data={data} refresh={refresh} notify={notify} />}
         {section === "pos" && <PosView data={data} cart={cart} setCart={setCart} payment={payment} setPayment={setPayment} refresh={refresh} notify={notify} />}
-        {section === "accounts" && <AccountsView data={data} />}
+        {section === "accounts" && <FinanceModule data={data} refresh={refresh} notify={notify} />}
         {section === "hr" && <HumanResourcesView data={data} />}
       </div>
     </main>
@@ -288,17 +301,7 @@ function PosView({ data, cart, setCart, payment, setPayment, refresh, notify }: 
 }
 
 const expenseLabels: Record<RestaurantExpense["category"], string> = { supplies: "مستلزمات تشغيل", utilities: "مرافق", rent: "إيجار", maintenance: "صيانة", marketing: "تسويق", delivery: "توصيل", other: "أخرى" };
-const paymentLabels: Record<RestaurantExpense["paymentMethod"], string> = { cash: "نقدي", card: "بطاقة", wallet: "محفظة" };
 const attendanceLabels: Record<AttendanceRecord["status"], string> = { present: "حاضر", absent: "غائب", leave: "إجازة" };
-
-function AccountsView({ data }: { data: AppData }) {
-  const sales = data.saleOrders.reduce((sum, order) => sum + order.totalPiasters, 0);
-  const tax = data.saleOrders.reduce((sum, order) => sum + order.taxPiasters, 0);
-  const costOfSales = data.saleOrders.reduce((sum, order) => sum + order.items.reduce((itemSum, item) => itemSum + item.costPiasters * item.quantity, 0), 0);
-  const expenses = data.expenses.reduce((sum, expense) => sum + expense.amountPiasters, 0);
-  const netProfit = sales - tax - costOfSales - expenses;
-  return <><div className="stats"><Stat label="إجمالي المبيعات" value={formatMoney(sales)} hint={`${data.saleOrders.length} فاتورة مدفوعة`} icon="ج" /><Stat label="تكلفة المبيعات" value={formatMoney(costOfSales)} hint="من تكلفة المنتجات المباعة" icon="∑" /><Stat label="مصروفات التشغيل" value={formatMoney(expenses)} hint={`${data.expenses.length} مصروف مسجل`} icon="−" /><Stat label="صافي الربح" value={formatMoney(netProfit)} hint="بعد الضريبة والتكلفة والمصروفات" icon="=" /></div><div className="accounts-grid"><section className="panel"><div className="panel-head"><div><h2>المصروفات</h2><small>إيجار ومرافق وصيانة وتسويق ومستلزمات المطعم</small></div></div>{data.expenses.length ? <div className="table-wrap"><table><thead><tr><th>التاريخ</th><th>البيان</th><th>التصنيف</th><th>طريقة الدفع</th><th>القيمة</th></tr></thead><tbody>{data.expenses.map((expense) => <tr key={expense.id}><td>{new Date(expense.expenseDate).toLocaleDateString("ar-EG")}</td><td><strong>{expense.description}</strong></td><td><span className="badge">{expenseLabels[expense.category]}</span></td><td>{paymentLabels[expense.paymentMethod]}</td><td><strong>{formatMoney(expense.amountPiasters)}</strong></td></tr>)}</tbody></table></div> : <Empty icon="ج" title="لا توجد مصروفات" text="سجّل أول مصروف ليظهر في صافي الربح." />}</section><section className="panel"><div className="panel-head"><div><h2>التحصيل حسب طريقة الدفع</h2><small>قراءة مباشرة من فواتير الكاشير</small></div></div><div className="payment-summary">{(["cash", "card", "wallet"] as const).map((method) => <div key={method}><span>{paymentLabels[method]}</span><strong>{formatMoney(data.saleOrders.filter((order) => order.paymentMethod === method).reduce((sum, order) => sum + order.totalPiasters, 0))}</strong></div>)}</div><div className="account-result"><span>ضريبة المبيعات</span><strong>{formatMoney(tax)}</strong></div><div className={`account-result net ${netProfit < 0 ? "loss" : ""}`}><span>صافي النتيجة</span><strong>{formatMoney(netProfit)}</strong></div></section></div></>;
-}
 
 function HumanResourcesView({ data }: { data: AppData }) {
   const today = new Date().toISOString().slice(0, 10); const month = today.slice(0, 7);

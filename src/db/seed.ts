@@ -56,7 +56,7 @@ export async function ensureEmptyWorkspace() {
 export async function resetAllData() {
   await db.transaction(
     "rw",
-    [db.units, db.items, db.warehouses, db.balances, db.recipes, db.movements, db.productionOrders, db.saleOrders, db.expenses, db.employees, db.attendanceRecords, db.payrollRecords],
+    [db.units, db.items, db.warehouses, db.balances, db.recipes, db.movements, db.productionOrders, db.saleOrders, db.expenses, db.employees, db.attendanceRecords, db.payrollRecords, db.accounts, db.journalEntries, db.journalLines, db.suppliers, db.purchaseInvoices, db.purchaseInvoiceLines, db.supplierPayments, db.cashAccounts, db.cashTransfers, db.shifts],
     async () => {
       await Promise.all([
         db.units.clear(),
@@ -71,6 +71,16 @@ export async function resetAllData() {
         db.employees.clear(),
         db.attendanceRecords.clear(),
         db.payrollRecords.clear(),
+        db.accounts.clear(),
+        db.journalEntries.clear(),
+        db.journalLines.clear(),
+        db.suppliers.clear(),
+        db.purchaseInvoices.clear(),
+        db.purchaseInvoiceLines.clear(),
+        db.supplierPayments.clear(),
+        db.cashAccounts.clear(),
+        db.cashTransfers.clear(),
+        db.shifts.clear(),
       ]);
     },
   );

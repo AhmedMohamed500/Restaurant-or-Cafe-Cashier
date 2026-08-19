@@ -3,13 +3,23 @@
 import Dexie, { type EntityTable } from "dexie";
 import type {
   AppSettings,
+  AccountingAccount,
   AttendanceRecord,
+  CashAccount,
+  CashierShift,
+  CashTransfer,
   Employee,
   InventoryItem,
+  JournalEntry,
+  JournalLine,
   ProductionOrder,
   PayrollRecord,
+  PurchaseInvoice,
+  PurchaseInvoiceLine,
   Recipe,
   RestaurantExpense,
+  Supplier,
+  SupplierPayment,
   SaleOrder,
   StockBalance,
   StockMovement,
@@ -30,6 +40,16 @@ export class RestaurantFlowDatabase extends Dexie {
   employees!: EntityTable<Employee, "id">;
   attendanceRecords!: EntityTable<AttendanceRecord, "id">;
   payrollRecords!: EntityTable<PayrollRecord, "id">;
+  accounts!: EntityTable<AccountingAccount, "id">;
+  journalEntries!: EntityTable<JournalEntry, "id">;
+  journalLines!: EntityTable<JournalLine, "id">;
+  suppliers!: EntityTable<Supplier, "id">;
+  purchaseInvoices!: EntityTable<PurchaseInvoice, "id">;
+  purchaseInvoiceLines!: EntityTable<PurchaseInvoiceLine, "id">;
+  supplierPayments!: EntityTable<SupplierPayment, "id">;
+  cashAccounts!: EntityTable<CashAccount, "id">;
+  cashTransfers!: EntityTable<CashTransfer, "id">;
+  shifts!: EntityTable<CashierShift, "id">;
   settings!: EntityTable<AppSettings, "id">;
 
   constructor() {
@@ -76,6 +96,31 @@ export class RestaurantFlowDatabase extends Dexie {
       employees: "id, code, name, role, status",
       attendanceRecords: "id, employeeId, workDate, status",
       payrollRecords: "id, employeeId, month, status",
+      settings: "id",
+    });
+    this.version(4).stores({
+      units: "id, code, family, active",
+      items: "id, code, nameAr, category, stage, active",
+      warehouses: "id, code, stage, active",
+      balances: "id, [warehouseId+itemId], warehouseId, itemId",
+      recipes: "id, code, outputItemId, active",
+      movements: "id, warehouseId, itemId, type, reference, createdAt, sourceWarehouseId, destinationWarehouseId",
+      productionOrders: "id, number, recipeId, createdAt",
+      saleOrders: "id, number, createdAt, paymentMethod",
+      expenses: "id, category, expenseDate, paymentMethod, accountId, paidFromAccountId, createdAt",
+      employees: "id, code, name, role, status",
+      attendanceRecords: "id, employeeId, workDate, status",
+      payrollRecords: "id, employeeId, month, status",
+      accounts: "id, &code, parentId, type, active, system",
+      journalEntries: "id, &entryNumber, [referenceType+referenceId], referenceType, referenceId, referenceNumber, date, status",
+      journalLines: "id, journalEntryId, accountId, sourceModule",
+      suppliers: "id, &code, name, active",
+      purchaseInvoices: "id, &invoiceNumber, supplierId, warehouseId, date, kind, paymentType, status",
+      purchaseInvoiceLines: "id, purchaseInvoiceId, itemId",
+      supplierPayments: "id, supplierId, date, paymentAccountId",
+      cashAccounts: "id, &code, type, ledgerAccountId, active",
+      cashTransfers: "id, &number, date, fromCashAccountId, toCashAccountId",
+      shifts: "id, &number, cashier, openedAt, status",
       settings: "id",
     });
   }

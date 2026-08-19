@@ -151,6 +151,144 @@ export interface RestaurantExpense extends AuditFields {
   amountPiasters: number;
   paymentMethod: "cash" | "card" | "wallet";
   expenseDate: string;
+  accountId?: EntityId;
+  vatPiasters?: number;
+  paidFromAccountId?: EntityId;
+  reference?: string;
+  notes?: string;
+  attachmentName?: string;
+}
+
+export type AccountType = "asset" | "liability" | "equity" | "revenue" | "contra_revenue" | "cost_of_sales" | "expense" | "other_income";
+
+export interface AccountingAccount extends AuditFields {
+  id: EntityId;
+  code: string;
+  nameAr: string;
+  nameEn: string;
+  parentId?: EntityId;
+  type: AccountType;
+  active: boolean;
+  system: boolean;
+}
+
+export interface JournalEntry extends AuditFields {
+  id: EntityId;
+  entryNumber: string;
+  date: string;
+  referenceType: string;
+  referenceId: EntityId;
+  referenceNumber: string;
+  description: string;
+  status: "posted" | "reversed";
+  postedAt: string;
+  reversedEntryId?: EntityId;
+}
+
+export interface JournalLine {
+  id: EntityId;
+  journalEntryId: EntityId;
+  accountId: EntityId;
+  debitMinor: number;
+  creditMinor: number;
+  description: string;
+  sourceModule: string;
+  costCenterId?: EntityId;
+  branchId?: EntityId;
+}
+
+export interface Supplier extends AuditFields {
+  id: EntityId;
+  code: string;
+  name: string;
+  phone?: string;
+  taxNumber?: string;
+  address?: string;
+  openingBalancePiasters: number;
+  paymentTerms?: string;
+  notes?: string;
+  active: boolean;
+}
+
+export interface PurchaseInvoice extends AuditFields {
+  id: EntityId;
+  invoiceNumber: string;
+  date: string;
+  supplierId: EntityId;
+  warehouseId: EntityId;
+  kind: "invoice" | "return";
+  paymentType: "cash" | "credit" | "partial";
+  paymentAccountId?: EntityId;
+  paidPiasters: number;
+  subtotalPiasters: number;
+  vatPiasters: number;
+  totalPiasters: number;
+  reference?: string;
+  notes?: string;
+  status: "posted";
+}
+
+export interface PurchaseInvoiceLine {
+  id: EntityId;
+  purchaseInvoiceId: EntityId;
+  itemId: EntityId;
+  quantity: number;
+  unitId: EntityId;
+  unitCostPiasters: number;
+  vatRate: number;
+  subtotalPiasters: number;
+  vatPiasters: number;
+  lineTotalPiasters: number;
+}
+
+export interface SupplierPayment extends AuditFields {
+  id: EntityId;
+  supplierId: EntityId;
+  date: string;
+  amountPiasters: number;
+  paymentMethod: "cash" | "bank";
+  paymentAccountId: EntityId;
+  reference: string;
+  notes?: string;
+}
+
+export interface CashAccount extends AuditFields {
+  id: EntityId;
+  code: string;
+  nameAr: string;
+  type: "cash" | "bank" | "card_clearing" | "wallet_clearing";
+  ledgerAccountId: EntityId;
+  openingBalancePiasters: number;
+  active: boolean;
+}
+
+export interface CashTransfer extends AuditFields {
+  id: EntityId;
+  number: string;
+  date: string;
+  fromCashAccountId: EntityId;
+  toCashAccountId: EntityId;
+  amountPiasters: number;
+  reference?: string;
+  notes?: string;
+}
+
+export interface CashierShift extends AuditFields {
+  id: EntityId;
+  number: string;
+  cashier: string;
+  openedAt: string;
+  closedAt?: string;
+  openingCashPiasters: number;
+  cashSalesPiasters: number;
+  cardSalesPiasters: number;
+  walletSalesPiasters: number;
+  cashRefundsPiasters: number;
+  cashPaidOutsPiasters: number;
+  expectedCashPiasters: number;
+  actualCashPiasters?: number;
+  differencePiasters?: number;
+  status: "open" | "closed";
 }
 
 export interface Employee extends AuditFields {

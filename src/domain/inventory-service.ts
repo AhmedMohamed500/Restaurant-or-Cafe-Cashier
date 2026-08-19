@@ -14,6 +14,7 @@ import type {
 } from "./models";
 import { multiplyMoney, roundQuantity } from "@/src/lib/money";
 import { assertCompatibleUnitFamilies, convertUnitQuantity, normalizeRecipeMassQuantity } from "@/src/lib/units";
+import { postInventoryReceipt, postInventoryToKitchenTransfer, postProductionOrder, postSaleOrder } from "./accounting-service";
 
 const now = () => new Date().toISOString();
 const uid = () => crypto.randomUUID();
@@ -86,7 +87,7 @@ export async function addOpeningStock(input: {
   reference?: string;
   note?: string;
 }) {
-  return db.transaction("rw", [db.units, db.items, db.warehouses, db.balances, db.movements], async () => {
+  return db.transaction("rw", [db.units, db.items, db.warehouses, db.balances, db.movements, db.accounts, db.journalEntries, db.journalLines], async () => {
     if (input.unitCostPiasters < 0) throw new Error("التكلفة لا يمكن أن تكون سالبة");
     const enteredUnit = await db.units.get(input.enteredUnitId ?? "");
     let item = input.itemId ? await db.items.get(input.itemId) : undefined;
@@ -125,6 +126,7 @@ export async function addOpeningStock(input: {
       note: input.note, createdAt: timestamp, updatedAt: timestamp, createdBy: actor,
     };
     await db.movements.put(movement);
+    await postInventoryReceipt(movement.id, movement.reference, totalCostPiasters);
     return movement;
   });
 }
@@ -136,7 +138,7 @@ export async function transferToKitchen(input: {
   reference?: string;
   note?: string;
 }) {
-  return db.transaction("rw", [db.units, db.items, db.warehouses, db.balances, db.movements], async () => {
+  return db.transaction("rw", [db.units, db.items, db.warehouses, db.balances, db.movements, db.accounts, db.journalEntries, db.journalLines], async () => {
     const item = await db.items.get(input.itemId);
     if (!item || item.stage === "finished") throw new Error("اختر مادة خام صالحة للتحويل");
     const [source, destination] = await Promise.all([activeWarehouse("raw"), activeWarehouse("work_in_progress")]);
@@ -160,6 +162,7 @@ export async function transferToKitchen(input: {
       { ...common, id: uid(), warehouseId: destination.id, sourceWarehouseId: source.id, destinationWarehouseId: destination.id, type: "transfer_to_kitchen_in", quantity: quantityBase, totalCostPiasters: transferredValue },
     ];
     await db.movements.bulkPut(movements);
+    await postInventoryToKitchenTransfer(reference, reference, transferredValue);
     return movements;
   });
 }
@@ -171,7 +174,7 @@ export async function executeProduction(input: {
   sourceWarehouseId?: string;
   targetWarehouseId?: string;
 }) {
-  return db.transaction("rw", [db.units, db.recipes, db.items, db.warehouses, db.balances, db.movements, db.productionOrders], async () => {
+  return db.transaction("rw", [db.units, db.recipes, db.items, db.warehouses, db.balances, db.movements, db.productionOrders, db.accounts, db.journalEntries, db.journalLines], async () => {
     const recipe = await db.recipes.get(input.recipeId);
     if (!recipe) throw new Error("أمر التصنيع غير موجود");
     const normalizedIngredients = await normalizeRecipeIngredientsToGrams(recipe.ingredients);
@@ -247,12 +250,13 @@ export async function executeProduction(input: {
       createdAt: timestamp, updatedAt: timestamp, createdBy: actor,
     };
     await db.productionOrders.put(order);
+    await postProductionOrder(order.id, order.number, totalCost);
     return order;
   });
 }
 
 export async function completeSale(order: Omit<SaleOrder, "id" | "number" | "status" | "createdAt" | "updatedAt" | "createdBy">) {
-  return db.transaction("rw", [db.settings, db.saleOrders, db.items, db.warehouses, db.balances, db.movements], async () => {
+  return db.transaction("rw", [db.settings, db.saleOrders, db.items, db.warehouses, db.balances, db.movements, db.accounts, db.journalEntries, db.journalLines], async () => {
     const settings = await db.settings.get("settings");
     if (!settings?.activeShift) throw new Error("يجب فتح وردية قبل تسجيل المبيعات");
     const finishedWarehouse = await activeWarehouse("finished");
@@ -278,6 +282,8 @@ export async function completeSale(order: Omit<SaleOrder, "id" | "number" | "sta
     await db.movements.bulkPut(movements);
     const sale: SaleOrder = { ...order, id: uid(), number: reference, status: "paid", createdAt: timestamp, updatedAt: timestamp, createdBy: "local-cashier" };
     await db.saleOrders.put(sale);
+    const cogsPiasters = movements.reduce((sum, movement) => sum + Math.abs(movement.totalCostPiasters), 0);
+    await postSaleOrder(sale.id, sale.number, sale.subtotalPiasters, sale.taxPiasters, sale.totalPiasters, cogsPiasters, sale.paymentMethod);
     return sale;
   });
 }
