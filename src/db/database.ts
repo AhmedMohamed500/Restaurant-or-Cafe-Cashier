@@ -26,7 +26,7 @@ import type {
   WasteEntry,
   AuditLog,
   OperationalAlert,
-  LocalUser, RolePermission, Approval, PurchaseRequest, PurchaseRequestLine, ProcurementOrder, ProcurementOrderLine, GoodsReceipt, GoodsReceiptLine, SupplierInvoiceRecord, SupplierInvoiceRecordLine, PurchaseReturnRecord,
+  LocalUser, RolePermission, Approval, PurchaseRequest, PurchaseRequestLine, ProcurementOrder, ProcurementOrderLine, GoodsReceipt, GoodsReceiptLine, SupplierInvoiceRecord, SupplierInvoiceRecordLine, SupplierInvoicePaymentAllocation, PurchaseReturnRecord,
   SaleOrder,
   StockBalance,
   StockMovement,
@@ -68,6 +68,7 @@ export class RestaurantFlowDatabase extends Dexie {
   procurementOrders!: EntityTable<ProcurementOrder, "id">; procurementOrderLines!: EntityTable<ProcurementOrderLine, "id">;
   goodsReceipts!: EntityTable<GoodsReceipt, "id">; goodsReceiptLines!: EntityTable<GoodsReceiptLine, "id">;
   supplierInvoiceRecords!: EntityTable<SupplierInvoiceRecord, "id">; supplierInvoiceRecordLines!: EntityTable<SupplierInvoiceRecordLine, "id">;
+  supplierInvoicePaymentAllocations!: EntityTable<SupplierInvoicePaymentAllocation, "id">;
   purchaseReturnRecords!: EntityTable<PurchaseReturnRecord, "id">;
   settings!: EntityTable<AppSettings, "id">;
 
@@ -181,6 +182,10 @@ export class RestaurantFlowDatabase extends Dexie {
       goodsReceipts:"id, &number, purchaseOrderId, supplierId, warehouseId, receiptDate",goodsReceiptLines:"id, goodsReceiptId, purchaseOrderLineId, itemId",
       supplierInvoiceRecords:"id, &number, supplierInvoiceNumber, supplierId, purchaseOrderId, goodsReceiptId, invoiceDate, dueDate, status",supplierInvoiceRecordLines:"id, supplierInvoiceId, itemId",
       purchaseReturnRecords:"id, &number, supplierId, goodsReceiptId, supplierInvoiceId, warehouseId, itemId, status",settings:"id",
+    });
+    this.version(7).stores({
+      units:"id, code, family, active",items:"id, code, nameAr, category, stage, active",warehouses:"id, code, stage, active",balances:"id, [warehouseId+itemId], warehouseId, itemId",recipes:"id, code, outputItemId, active",movements:"id, warehouseId, itemId, type, reference, createdAt, sourceWarehouseId, destinationWarehouseId",productionOrders:"id, number, recipeId, createdAt",saleOrders:"id, number, createdAt, paymentMethod, shiftId",expenses:"id, category, expenseDate, paymentMethod, accountId, paidFromAccountId, createdAt",employees:"id, code, name, role, status",attendanceRecords:"id, employeeId, workDate, status",payrollRecords:"id, employeeId, month, status",accounts:"id, &code, parentId, type, active, system",journalEntries:"id, &entryNumber, [referenceType+referenceId], referenceType, referenceId, referenceNumber, date, status",journalLines:"id, journalEntryId, accountId, sourceModule",suppliers:"id, &code, name, active",purchaseInvoices:"id, &invoiceNumber, supplierId, warehouseId, date, kind, paymentType, status",purchaseInvoiceLines:"id, purchaseInvoiceId, itemId",supplierPayments:"id, supplierId, date, paymentAccountId",cashAccounts:"id, &code, type, ledgerAccountId, active",cashTransfers:"id, &number, date, fromCashAccountId, toCashAccountId",shifts:"id, &number, cashier, openedAt, status",shiftCashMovements:"id, &number, shiftId, type, occurredAt",stockCounts:"id, &number, warehouseId, countDate, status",stockCountLines:"id, stockCountId, itemId",wasteEntries:"id, &number, warehouseId, itemId, reason, occurredAt, shiftId",auditLogs:"id, action, entityType, entityId, reference, timestamp, localUser, module",alerts:"id, type, severity, entityId, createdAt, resolvedAt",
+      users:"id, &username, role, active",rolePermissions:"id, [role+permission], role, permission",approvals:"id, entityType, entityId, reference, requestedBy, status, requestedAt",purchaseRequests:"id, &number, requestDate, requestedBy, warehouseId, status",purchaseRequestLines:"id, purchaseRequestId, itemId",procurementOrders:"id, &number, requestId, supplierId, warehouseId, orderDate, status",procurementOrderLines:"id, purchaseOrderId, itemId",goodsReceipts:"id, &number, purchaseOrderId, supplierId, warehouseId, receiptDate",goodsReceiptLines:"id, goodsReceiptId, purchaseOrderLineId, itemId",supplierInvoiceRecords:"id, &number, supplierInvoiceNumber, supplierId, purchaseOrderId, goodsReceiptId, invoiceDate, dueDate, status",supplierInvoiceRecordLines:"id, supplierInvoiceId, itemId",supplierInvoicePaymentAllocations:"id, paymentId, supplierInvoiceId",purchaseReturnRecords:"id, &number, supplierId, goodsReceiptId, supplierInvoiceId, warehouseId, itemId, status",settings:"id",
     });
   }
 }

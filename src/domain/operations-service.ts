@@ -1,10 +1,12 @@
 "use client";
 import { db } from "@/src/db/database";
-import type { ShiftCashMovement, StockCount, StockCountLine, StockMovement, WasteEntry, WasteReason } from "./models";
+import type { ShiftCashMovement, StockCount, StockCountLine, StockMovement, UserRole, WasteEntry, WasteReason } from "./models";
 import { convertUnitQuantity } from "@/src/lib/units";
 import { multiplyMoney, roundQuantity } from "@/src/lib/money";
 import { createJournal } from "./accounting-service";
 import { expectedShiftCash, shiftDifference, stockVariance } from "./operations-rules";
+import {requirePermission} from "./authorization-service";
+import {requestApproval} from "./approval-service";
 
 const uid=()=>crypto.randomUUID(), stamp=()=>new Date().toISOString(), actor="local-admin";
 const audit=()=>({createdAt:stamp(),updatedAt:stamp(),createdBy:actor});
@@ -37,6 +39,10 @@ export async function closeShiftControlled(shiftId:string,actualCashPiasters:num
   });
 }
 
+export async function closeShiftWithApproval(input:{shiftId:string;actualCashPiasters:number;role:UserRole;user:string}){
+  await requirePermission(input.role,"shifts.close");const [shift,settings]=await Promise.all([db.shifts.get(input.shiftId),db.settings.get("settings")]);if(!shift)throw new Error("الوردية غير موجودة");const sales=await db.saleOrders.where("shiftId").equals(shift.id).toArray(),movements=await db.shiftCashMovements.where("shiftId").equals(shift.id).toArray();const cash=sales.filter(x=>x.paymentMethod==="cash").reduce((s,x)=>s+x.totalPiasters,0),cashIn=movements.filter(x=>x.type==="cash_in").reduce((s,x)=>s+x.amountPiasters,0),cashOut=movements.filter(x=>x.type==="cash_out").reduce((s,x)=>s+x.amountPiasters,0),expected=expectedShiftCash({opening:shift.openingCashPiasters,cashSales:cash,cashIn,cashRefunds:shift.cashRefundsPiasters,cashOut}),difference=Math.abs(input.actualCashPiasters-expected),threshold=settings?.shiftDifferenceApprovalThresholdPiasters??0;if(difference>threshold){await requestApproval({entityType:"shift_difference",entityId:shift.id,reference:shift.number,requestedBy:input.user,amountPiasters:difference,payload:JSON.stringify({shiftId:shift.id,actualCashPiasters:input.actualCashPiasters}),notes:"فرق إغلاق وردية يتجاوز الحد"});return{pendingApproval:true,difference};}return{pendingApproval:false,...await closeShiftControlled(input.shiftId,input.actualCashPiasters)};
+}
+
 export async function createStockCount(warehouseId:string,notes?:string){
   return db.transaction("rw",[db.stockCounts,db.stockCountLines,db.balances,db.items],async()=>{
     const count:StockCount={id:uid(),number:await nextNumber("CNT",db.stockCounts),warehouseId,countDate:stamp().slice(0,10),status:"in_progress",notes,...audit()};
@@ -60,12 +66,16 @@ export async function approveStockCount(countId:string){
   });
 }
 
+export async function approveStockCountWithApproval(input:{countId:string;role:UserRole;user:string}){await requirePermission(input.role,"stock_count.approve");const [count,settings]=await Promise.all([db.stockCounts.get(input.countId),db.settings.get("settings")]);if(!count)throw new Error("الجرد غير موجود");const lines=await db.stockCountLines.where("stockCountId").equals(input.countId).toArray(),variance=lines.reduce((s,x)=>s+Math.abs(x.differenceValuePiasters),0),threshold=settings?.stockVarianceApprovalThresholdPiasters??0;if(variance>threshold){await requestApproval({entityType:"stock_count_variance",entityId:count.id,reference:count.number,requestedBy:input.user,amountPiasters:variance,payload:JSON.stringify({countId:count.id}),notes:"فرق جرد يتجاوز الحد"});await db.stockCounts.update(count.id,{status:"reviewed",updatedAt:stamp()});return{pendingApproval:true,variance};}return{pendingApproval:false,...await approveStockCount(input.countId)};}
+
 export async function postWaste(input:{warehouseId:string;itemId:string;enteredQuantity:number;unitId:string;reason:WasteReason;notes?:string}){
   return db.transaction("rw",[db.wasteEntries,db.units,db.items,db.warehouses,db.balances,db.movements,db.shifts,db.accounts,db.journalEntries,db.journalLines,db.auditLogs,db.alerts],async()=>{
     const [item,warehouse,unit]=await Promise.all([db.items.get(input.itemId),db.warehouses.get(input.warehouseId),db.units.get(input.unitId)]);if(!item||!warehouse||!unit)throw new Error("بيانات الهالك غير مكتملة");const base=await db.units.get(item.baseUnitId);if(!base||base.family!==unit.family)throw new Error("وحدة الهالك غير متوافقة");const quantity=convertUnitQuantity(input.enteredQuantity,unit.baseFactor,base.baseFactor),balance=await db.balances.get(`${warehouse.id}:${item.id}`);if(!balance||quantity<=0||quantity>balance.quantity-balance.reserved)throw new Error("كمية الهالك أكبر من الرصيد المتاح");const cost=balance.averageCostPiasters||item.averageCostPiasters,total=multiplyMoney(cost,quantity),number=await nextNumber("WST",db.wasteEntries),shift=await db.shifts.where("status").equals("open").first();const row:WasteEntry={id:uid(),number,occurredAt:stamp(),warehouseId:warehouse.id,itemId:item.id,quantity,enteredQuantity:input.enteredQuantity,unitId:unit.id,reason:input.reason,unitCostPiasters:cost,totalCostPiasters:total,shiftId:shift?.id,notes:input.notes,...audit()};
     await db.balances.update(balance.id,{quantity:roundQuantity(balance.quantity-quantity),updatedAt:stamp()});await db.wasteEntries.add(row);await db.movements.add({id:uid(),warehouseId:warehouse.id,itemId:item.id,type:"waste",quantity:-quantity,enteredQuantity:input.enteredQuantity,enteredUnitId:unit.id,unitCostPiasters:cost,totalCostPiasters:-total,reference:number,note:input.reason,...audit()});await createJournal({referenceType:"waste",referenceId:row.id,referenceNumber:number,description:"إثبات هالك تشغيلي",sourceModule:"waste",lines:[{accountCode:"5400",debitMinor:total,creditMinor:0,description:"تكلفة الهالك"},{accountCode:inventoryAccount(warehouse.stage),debitMinor:0,creditMinor:total,description:"صرف مخزون هالك"}]});await db.alerts.add({id:uid(),type:"waste",severity:"warning",title:"هالك مسجل",message:`${item.nameAr}: ${input.enteredQuantity} ${unit.symbol}`,entityId:row.id,createdAt:stamp()});await log("waste_post","waste",row.id,number,`quantity=${quantity};cost=${total}`);return row;
   });
 }
+
+export async function postWasteWithApproval(input:{warehouseId:string;itemId:string;enteredQuantity:number;unitId:string;reason:WasteReason;notes?:string;role:UserRole;user:string}){await requirePermission(input.role,"waste.create");const [item,unit,settings]=await Promise.all([db.items.get(input.itemId),db.units.get(input.unitId),db.settings.get("settings")]);if(!item||!unit)throw new Error("بيانات الهالك غير مكتملة");const base=await db.units.get(item.baseUnitId),balance=await db.balances.get(`${input.warehouseId}:${input.itemId}`);if(!base||base.family!==unit.family||!balance)throw new Error("بيانات رصيد الهالك غير مكتملة");const quantity=convertUnitQuantity(input.enteredQuantity,unit.baseFactor,base.baseFactor),total=multiplyMoney(balance.averageCostPiasters||item.averageCostPiasters,quantity),threshold=settings?.wasteApprovalThresholdPiasters??0,{role,user,...payload}=input;void role;void user;if(total>threshold){const entityId=uid(),reference=`WST-APP-${Date.now().toString().slice(-6)}`;await requestApproval({entityType:"waste",entityId,reference,requestedBy:input.user,amountPiasters:total,payload:JSON.stringify(payload),notes:"هالك يتجاوز حد الموافقة"});return{pendingApproval:true,reference,totalCostPiasters:total};}return{pendingApproval:false,entry:await postWaste(payload)};}
 
 export async function getFoodCostAnalysis(){
  const recipes=await db.recipes.toArray(),items=await db.items.toArray(),orders=await db.productionOrders.toArray(),movements=await db.movements.where("type").equals("production_consume").toArray();

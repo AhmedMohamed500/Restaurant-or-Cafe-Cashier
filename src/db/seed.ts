@@ -57,7 +57,7 @@ export async function ensureEmptyWorkspace() {
 export async function resetAllData() {
   await db.transaction(
     "rw",
-    [db.units, db.items, db.warehouses, db.balances, db.recipes, db.movements, db.productionOrders, db.saleOrders, db.expenses, db.employees, db.attendanceRecords, db.payrollRecords, db.accounts, db.journalEntries, db.journalLines, db.suppliers, db.purchaseInvoices, db.purchaseInvoiceLines, db.supplierPayments, db.cashAccounts, db.cashTransfers, db.shifts, db.shiftCashMovements, db.stockCounts, db.stockCountLines, db.wasteEntries, db.auditLogs, db.alerts, db.users, db.rolePermissions, db.approvals, db.purchaseRequests, db.purchaseRequestLines, db.procurementOrders, db.procurementOrderLines, db.goodsReceipts, db.goodsReceiptLines, db.supplierInvoiceRecords, db.supplierInvoiceRecordLines, db.purchaseReturnRecords],
+    [db.units, db.items, db.warehouses, db.balances, db.recipes, db.movements, db.productionOrders, db.saleOrders, db.expenses, db.employees, db.attendanceRecords, db.payrollRecords, db.accounts, db.journalEntries, db.journalLines, db.suppliers, db.purchaseInvoices, db.purchaseInvoiceLines, db.supplierPayments, db.cashAccounts, db.cashTransfers, db.shifts, db.shiftCashMovements, db.stockCounts, db.stockCountLines, db.wasteEntries, db.auditLogs, db.alerts, db.users, db.rolePermissions, db.approvals, db.purchaseRequests, db.purchaseRequestLines, db.procurementOrders, db.procurementOrderLines, db.goodsReceipts, db.goodsReceiptLines, db.supplierInvoiceRecords, db.supplierInvoiceRecordLines, db.supplierInvoicePaymentAllocations, db.purchaseReturnRecords],
     async () => {
       await Promise.all([
         db.units.clear(),
@@ -90,7 +90,7 @@ export async function resetAllData() {
         db.alerts.clear(),
         db.users.clear(), db.rolePermissions.clear(), db.approvals.clear(), db.purchaseRequests.clear(), db.purchaseRequestLines.clear(),
         db.procurementOrders.clear(), db.procurementOrderLines.clear(), db.goodsReceipts.clear(), db.goodsReceiptLines.clear(),
-        db.supplierInvoiceRecords.clear(), db.supplierInvoiceRecordLines.clear(), db.purchaseReturnRecords.clear(),
+        db.supplierInvoiceRecords.clear(), db.supplierInvoiceRecordLines.clear(), db.supplierInvoicePaymentAllocations.clear(), db.purchaseReturnRecords.clear(),
       ]);
     },
   );

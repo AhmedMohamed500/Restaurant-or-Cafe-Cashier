@@ -11,6 +11,7 @@ export type MovementType =
   | "sale"
   | "finished_product_sale"
   | "adjustment"
+  | "purchase_return"
   | "waste";
 
 export interface AuditFields {
@@ -323,7 +324,8 @@ export interface WasteEntry extends AuditFields {
 
 export interface AuditLog {
   id: EntityId; action: string; entityType: string; entityId: EntityId; reference: string;
-  timestamp: string; localUser: string; beforeSummary?: string; afterSummary?: string;
+  timestamp: string; localUser: string; userId?:EntityId; userName?:string; module?:string;
+  beforeSummary?: string; afterSummary?: string; reason?:string; sessionId?:string;
 }
 
 export interface OperationalAlert {
@@ -332,11 +334,11 @@ export interface OperationalAlert {
   createdAt: string; resolvedAt?: string;
 }
 
-export type Permission = "inventory.view"|"inventory.receive"|"inventory.transfer"|"production.view"|"production.execute"|"purchases.request"|"purchases.approve_request"|"purchases.create_order"|"purchases.approve_order"|"purchases.receive"|"waste.create"|"waste.approve"|"stock_count.create"|"stock_count.approve"|"cashier.sell"|"cashier.discount"|"cashier.refund"|"shifts.open"|"shifts.close"|"shifts.approve_difference"|"accounting.view"|"accounting.post"|"accounting.reverse"|"reports.financial"|"users.manage"|"settings.manage";
+export type Permission = "inventory.view"|"inventory.receive"|"inventory.transfer"|"production.view"|"production.execute"|"purchases.request"|"purchases.approve_request"|"purchases.create_order"|"purchases.approve_order"|"purchases.receive"|"purchases.invoice"|"purchases.pay"|"purchases.return"|"waste.create"|"waste.approve"|"stock_count.create"|"stock_count.approve"|"cashier.sell"|"cashier.discount"|"cashier.refund"|"shifts.open"|"shifts.close"|"shifts.approve_difference"|"accounting.view"|"accounting.post"|"accounting.reverse"|"reports.financial"|"reports.operational"|"approvals.decide"|"audit.view"|"backup.manage"|"users.manage"|"settings.manage";
 export type UserRole = "OWNER"|"MANAGER"|"ACCOUNTANT"|"STOREKEEPER"|"CASHIER"|"KITCHEN";
 export interface LocalUser extends AuditFields { id:EntityId; username:string; displayName:string; passwordHash:string; role:UserRole; active:boolean; }
 export interface RolePermission { id:EntityId; role:UserRole; permission:Permission; }
-export interface Approval extends AuditFields { id:EntityId; entityType:string; entityId:EntityId; reference:string; requestedBy:string; requestedAt:string; status:"pending"|"approved"|"rejected"; approvedBy?:string; approvedAt?:string; rejectedBy?:string; rejectedAt?:string; rejectionReason?:string; notes?:string; }
+export interface Approval extends AuditFields { id:EntityId; entityType:string; entityId:EntityId; reference:string; requestedBy:string; requestedAt:string; status:"pending"|"approved"|"rejected"; amountPiasters?:number; payload?:string; approvedBy?:string; approvedAt?:string; rejectedBy?:string; rejectedAt?:string; rejectionReason?:string; notes?:string; }
 export interface PurchaseRequest extends AuditFields { id:EntityId; number:string; requestDate:string; requestedBy:string; requiredDate:string; warehouseId:EntityId; notes?:string; status:"draft"|"pending_approval"|"approved"|"rejected"|"converted"; }
 export interface PurchaseRequestLine { id:EntityId; purchaseRequestId:EntityId; itemId:EntityId; currentStock:number; minimumStock:number; requestedQuantity:number; unitId:EntityId; estimatedCostPiasters:number; notes?:string; }
 export interface ProcurementOrder extends AuditFields { id:EntityId; number:string; requestId?:EntityId; supplierId:EntityId; orderDate:string; expectedDeliveryDate:string; warehouseId:EntityId; paymentTerms?:string; notes?:string; status:"draft"|"pending_approval"|"approved"|"partially_received"|"fully_received"|"cancelled"|"closed"; subtotalPiasters:number; discountPiasters:number; vatPiasters:number; totalPiasters:number; }
@@ -345,7 +347,8 @@ export interface GoodsReceipt { id:EntityId; number:string; purchaseOrderId:Enti
 export interface GoodsReceiptLine { id:EntityId; goodsReceiptId:EntityId; purchaseOrderLineId:EntityId; itemId:EntityId; quantity:number; unitId:EntityId; unitCostPiasters:number; }
 export interface SupplierInvoiceRecord extends AuditFields { id:EntityId; number:string; supplierInvoiceNumber:string; supplierId:EntityId; invoiceDate:string; dueDate:string; purchaseOrderId?:EntityId; goodsReceiptId?:EntityId; subtotalPiasters:number; discountPiasters:number; vatPiasters:number; totalPiasters:number; paidPiasters:number; matchingStatus:"matched"|"quantity_difference"|"price_difference"|"unmatched"; status:"unpaid"|"partially_paid"|"paid"; notes?:string; }
 export interface SupplierInvoiceRecordLine { id:EntityId; supplierInvoiceId:EntityId; itemId:EntityId; quantity:number; unitId:EntityId; unitCostPiasters:number; discountPiasters:number; vatRate:number; totalPiasters:number; }
-export interface PurchaseReturnRecord extends AuditFields { id:EntityId; number:string; supplierId:EntityId; goodsReceiptId?:EntityId; supplierInvoiceId?:EntityId; warehouseId:EntityId; itemId:EntityId; quantity:number; unitId:EntityId; reason:"damaged"|"wrong_item"|"quality"|"expired"|"supplier_error"|"other"; totalPiasters:number; status:"posted"; }
+export interface SupplierInvoicePaymentAllocation extends AuditFields { id:EntityId; paymentId:EntityId; supplierInvoiceId:EntityId; amountPiasters:number; }
+export interface PurchaseReturnRecord extends AuditFields { id:EntityId; number:string; supplierId:EntityId; goodsReceiptId?:EntityId; supplierInvoiceId?:EntityId; warehouseId:EntityId; itemId:EntityId; quantity:number; unitId:EntityId; reason:"damaged"|"wrong_item"|"quality"|"expired"|"supplier_error"|"other"; subtotalPiasters:number; vatPiasters:number; totalPiasters:number; status:"posted"; }
 
 export interface Employee extends AuditFields {
   id: EntityId;
@@ -392,4 +395,8 @@ export interface AppSettings {
   logoDataUrl?: string;
   username?: string;
   passwordHash?: string;
+  wasteApprovalThresholdPiasters?:number;
+  stockVarianceApprovalThresholdPiasters?:number;
+  shiftDifferenceApprovalThresholdPiasters?:number;
+  discountApprovalThresholdPercent?:number;
 }

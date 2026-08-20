@@ -104,3 +104,27 @@
 ## حدود الخدمات الجديدة
 
 `purchasing-service.ts` يدير دورة الشراء، و`authorization-service.ts` الصلاحيات، و`approval-service.ts` الفصل بين الإنشاء والاعتماد، و`backup-service.ts` النسخ والاستعادة، و`reporting-service.ts` قراءات التقارير والتصدير. واجهة React تستدعي هذه الخدمات ولا تنفذ ترحيل المخزون أو القيود بنفسها.
+
+## معمارية التحكم المؤسسي — schema v7
+
+```text
+Purchase Request ──Approval──> Purchase Order ──Approval──> Goods Receipt
+                                                               │ كمية فقط
+                                                               ▼
+                                                        InventoryService
+                                                               │
+Goods Receipt ──matching──> Supplier Invoice ──allocation──> Supplier Payment
+        └──────────────────────── Purchase Return ──────────────┘
+```
+
+- `GoodsReceipt` هو نقطة ترحيل الكمية الوحيدة، ويستخدم `InventoryService` ونفس `balances` و`movements`.
+- `SupplierInvoice` نقطة الاعتراف المالي؛ لذلك لا تعيد إضافة المخزون.
+- `SupplierInvoicePaymentAllocation` يفصل حركة الدفع عن توزيعها، ويسمح بدفعات متعددة وفاتورة واحدة موزعة على أكثر من دفعة.
+- `AuthorizationService` مصدر واحد للأدوار والصلاحيات، وتتحقق الخدمات الحرجة من الصلاحية داخلها.
+- `ApprovalService` كيان موافقة عام، مع فصل الواجبات بين المنشئ والمعتمد.
+- `AuditService` يكتب أحداث الأعمال ومعرف جلسة محليًا ولا يسجل كلمات المرور.
+- `BackupService` يتحقق أولًا، يستعيد داخل transaction، ويحتفظ بلقطة rollback سرية لا تغادر الجهاز.
+
+## حدود المستودعات والاستعداد لقاعدة مركزية
+
+تعرف `src/repositories/contracts.ts` عقود `InventoryRepository`, `SalesRepository`, `PurchasingRepository`, `UserRepository`, و`ReportingRepository`. التنفيذ الحالي في `dexie-repositories.ts`. هذه الحدود تسمح بإضافة تنفيذ PostgreSQL/Supabase لاحقًا مع بقاء قواعد العمل داخل الخدمات. لا توجد قاعدة سحابية أو مزامنة أو فروع متعددة في هذه المرحلة.

@@ -6,13 +6,15 @@ import { db } from "@/src/db/database";
 import { ensureEmptyWorkspace, resetAllData } from "@/src/db/seed";
 import { ensureDefaultAccountingSetup } from "@/src/domain/accounting-service";
 import { addOpeningStock, completeSale, executeProduction, saveProductionDefinition, transferToKitchen } from "@/src/domain/inventory-service";
-import type { AccountingAccount, AppSettings, AttendanceRecord, AuditLog, CashAccount, CashierShift, CashTransfer, Employee, InventoryItem, JournalEntry, JournalLine, OperationalAlert, OrderItem, PayrollRecord, ProductionOrder, PurchaseInvoice, PurchaseInvoiceLine, Recipe, RestaurantExpense, SaleOrder, ShiftCashMovement, StockBalance, StockCount, StockCountLine, StockMovement, Supplier, SupplierPayment, UnitOfMeasure, Warehouse, WasteEntry } from "@/src/domain/models";
+import type { AccountingAccount, AppSettings, AttendanceRecord, AuditLog, CashAccount, CashierShift, CashTransfer, Employee, InventoryItem, JournalEntry, JournalLine, LocalUser, OperationalAlert, OrderItem, PayrollRecord, ProductionOrder, PurchaseInvoice, PurchaseInvoiceLine, Recipe, RestaurantExpense, SaleOrder, ShiftCashMovement, StockBalance, StockCount, StockCountLine, StockMovement, Supplier, SupplierPayment, UnitOfMeasure, UserRole, Warehouse, WasteEntry } from "@/src/domain/models";
 import { formatMoney, formatQuantity } from "@/src/lib/money";
 import { hashPassword } from "@/src/lib/auth";
 import { FinanceModule } from "@/src/features/finance/FinanceModule";
 import { OperationsControlModule } from "@/src/features/operations/OperationsControlModule";
 import { BusinessControlModule } from "@/src/features/administration/BusinessControlModule";
-import { ensureRolePermissions } from "@/src/domain/authorization-service";
+import { ensureRolePermissions, roleHasPermission } from "@/src/domain/authorization-service";
+import { authenticateLocalUser, ensureOwnerUser } from "@/src/domain/user-service";
+import { writeAudit } from "@/src/domain/audit-service";
 
 type WorkflowSection = "inventory" | "kitchen" | "production" | "finished" | "pos";
 type Section = WorkflowSection | "control" | "business" | "accounts" | "hr";
@@ -33,12 +35,21 @@ const managementItems: { id: Section; icon: string; label: string; eyebrow: stri
   { id: "hr", icon: "♟", label: "الموارد البشرية", eyebrow: "إدارة فريق العمل", description: "سجّل الموظفين والحضور والانصراف والرواتب والسلف والخصومات." },
 ];
 const allNavItems = [...navItems, ...managementItems];
+function sectionsForRole(role:UserRole):Section[]{
+  if(role==="OWNER")return allNavItems.map(x=>x.id);
+  if(role==="MANAGER")return ["inventory","kitchen","production","finished","pos","control","business","hr"];
+  if(role==="ACCOUNTANT")return ["accounts","business"];
+  if(role==="STOREKEEPER")return ["inventory","kitchen","control","business"];
+  if(role==="CASHIER")return ["pos","control"];
+  return ["kitchen","production","finished"];
+}
 
 const movementLabels: Record<string, string> = {
   opening: "رصيد قديم", purchase: "مشتريات", stock_receipt: "إذن إضافة",
   transfer_to_kitchen_out: "تحويل للمطبخ — صرف", transfer_to_kitchen_in: "تحويل للمطبخ — استلام",
   production_consume: "صرف تصنيع", production_output: "ناتج تصنيع", sale: "بيع قديم",
   finished_product_sale: "بيع منتج تام", adjustment: "تسوية", waste: "هالك",
+  purchase_return: "مرتجع شراء",
 };
 
 interface AppData {
@@ -75,6 +86,7 @@ interface AppData {
 
 const emptyData: AppData = { units: [], items: [], warehouses: [], balances: [], recipes: [], movements: [], productionOrders: [], saleOrders: [], expenses: [], employees: [], attendanceRecords: [], payrollRecords: [], accounts: [], journalEntries: [], journalLines: [], suppliers: [], purchaseInvoices: [], purchaseInvoiceLines: [], supplierPayments: [], cashAccounts: [], cashTransfers: [], shifts: [], shiftCashMovements: [], stockCounts: [], stockCountLines: [], wasteEntries: [], auditLogs: [], alerts: [] };
 const AUTH_SESSION_KEY = "restaurantflow-authenticated";
+const AUTH_USER_KEY = "restaurantflow-user-id";
 const PRODUCTION_UNIT_CODES = ["KG", "G", "COUNT"] as const;
 
 function productionUnitOptions(data: AppData, item?: InventoryItem) {
@@ -127,6 +139,7 @@ export function RestaurantFlowApp() {
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [payment, setPayment] = useState<"cash" | "card" | "wallet">("cash");
   const [authenticated, setAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState<LocalUser|null>(null);
   const [initializationError, setInitializationError] = useState("");
 
   const notify = useCallback((text: string, error = false) => {
@@ -145,14 +158,19 @@ export function RestaurantFlowApp() {
   useEffect(() => {
     ensureEmptyWorkspace().then(ensureDefaultAccountingSetup).then(ensureRolePermissions).then(refresh).then(async () => {
       const settings = await db.settings.get("settings");
-      setAuthenticated(Boolean(settings?.passwordHash && sessionStorage.getItem(AUTH_SESSION_KEY) === "1"));
+      if(settings?.username&&settings.passwordHash)await ensureOwnerUser(settings.username,settings.passwordHash);
+      const userId=sessionStorage.getItem(AUTH_USER_KEY),user=userId?await db.users.get(userId):undefined;
+      setCurrentUser(user?.active?user:null);setAuthenticated(Boolean(user?.active&&sessionStorage.getItem(AUTH_SESSION_KEY) === "1"));if(user?.active)setSection(sectionsForRole(user.role)[0]??"inventory");
       setReady(true);
     }).catch((error) => { setInitializationError(error instanceof Error ? error.message : "تعذر تهيئة البيانات المحلية"); setReady(true); });
   }, [notify, refresh]);
 
-  const activeNav = allNavItems.find((item) => item.id === section)!;
-  const isWorkflowSection = navItems.some((item) => item.id === section);
-  const goNext = () => { const index = navItems.findIndex((item) => item.id === section); if (index >= 0) setSection(navItems[Math.min(navItems.length - 1, index + 1)].id); };
+  const allowedSections:Section[]=currentUser?sectionsForRole(currentUser.role):[];
+  const visibleWorkflow=navItems.filter(x=>allowedSections.includes(x.id)),visibleManagement=managementItems.filter(x=>allowedSections.includes(x.id));
+  const safeSection=allowedSections.includes(section)?section:(allowedSections[0]??"inventory");
+  const activeNav = allNavItems.find((item) => item.id === safeSection)!;
+  const isWorkflowSection = visibleWorkflow.some((item) => item.id === safeSection);
+  const goNext = () => { const index = visibleWorkflow.findIndex((item) => item.id === safeSection); if (index >= 0) setSection(visibleWorkflow[Math.min(visibleWorkflow.length - 1, index + 1)].id); };
   const reset = async () => {
     if (!window.confirm("سيتم حذف جميع بيانات المطعم نهائيًا. هل تريد المتابعة؟")) return;
     await resetAllData(); await ensureEmptyWorkspace(); await ensureDefaultAccountingSetup(); await ensureRolePermissions(); await refresh(); setCart([]); setSection("inventory"); notify("تمت إعادة النظام إلى بداية دورة التشغيل");
@@ -162,36 +180,37 @@ export function RestaurantFlowApp() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = `restaurantflow-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url); notify("تم تصدير النسخة الاحتياطية");
   };
-  const logout = () => { sessionStorage.removeItem(AUTH_SESSION_KEY); setAuthenticated(false); setCart([]); };
+  const establishSession=async(user:LocalUser)=>{sessionStorage.setItem(AUTH_SESSION_KEY,"1");sessionStorage.setItem(AUTH_USER_KEY,user.id);setCurrentUser(user);setAuthenticated(true);setSection(sectionsForRole(user.role)[0]??"inventory");await writeAudit({action:"login",entityType:"session",entityId:user.id,reference:user.username,user:user.displayName,userId:user.id,module:"authentication"});await refresh();};
+  const logout = async () => {if(currentUser)await writeAudit({action:"logout",entityType:"session",entityId:currentUser.id,reference:currentUser.username,user:currentUser.displayName,userId:currentUser.id,module:"authentication"});sessionStorage.removeItem(AUTH_SESSION_KEY);sessionStorage.removeItem(AUTH_USER_KEY);setCurrentUser(null);setAuthenticated(false);setCart([]); };
 
   if (!ready) return <div className="loading"><div className="loading-card"><div className="loader" /><strong>جاري تجهيز RestaurantFlow</strong><p className="page-sub">تحميل دورة التشغيل…</p></div></div>;
   if (initializationError) return <div className="loading"><div className="loading-card"><strong>تعذر فتح RestaurantFlow</strong><p className="page-sub">{initializationError}</p><button className="btn primary" onClick={() => window.location.reload()}>إعادة المحاولة</button></div></div>;
-  if (!data.settings?.passwordHash) return <AccountSetup onDone={async () => { sessionStorage.setItem(AUTH_SESSION_KEY, "1"); setAuthenticated(true); await refresh(); }} />;
-  if (!authenticated) return <LoginScreen settings={data.settings} onSuccess={async () => { sessionStorage.setItem(AUTH_SESSION_KEY, "1"); setAuthenticated(true); await refresh(); }} />;
+  if (!data.settings?.passwordHash) return <AccountSetup onDone={establishSession} />;
+  if (!authenticated||!currentUser) return <LoginScreen settings={data.settings} onSuccess={establishSession} />;
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><BrandLogo settings={data.settings} /><div><strong>{data.settings?.restaurantName ?? "RestaurantFlow"}</strong><small>SMART RESTAURANT OS</small></div></div>
       <div className="nav-label">دورة التشغيل</div>
-      <nav className="nav" aria-label="التنقل الرئيسي">{navItems.map((item, index) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}><span>{item.icon}</span><span><small>{index + 1}</small>{item.label}</span></button>)}</nav>
+      <nav className="nav" aria-label="التنقل الرئيسي">{visibleWorkflow.map((item) => <button key={item.id} className={safeSection === item.id ? "active" : ""} onClick={() => setSection(item.id)}><span>{item.icon}</span><span>{item.label}</span></button>)}</nav>
       <div className="nav-label management-label">الإدارة</div>
-      <nav className="nav management-nav" aria-label="أقسام الإدارة">{managementItems.map((item) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}><span>{item.icon}</span><span>{item.label}</span></button>)}</nav>
-      <div className="user-card"><div className="avatar">{data.settings?.username?.slice(0, 1).toUpperCase()}</div><div><strong>{data.settings?.username}</strong><small>مدير النظام</small></div></div>
+      <nav className="nav management-nav" aria-label="أقسام الإدارة">{visibleManagement.map((item) => <button key={item.id} className={safeSection === item.id ? "active" : ""} onClick={() => setSection(item.id)}><span>{item.icon}</span><span>{item.label}</span></button>)}</nav>
+      <div className="user-card"><div className="avatar">{currentUser.displayName.slice(0, 1).toUpperCase()}</div><div><strong>{currentUser.displayName}</strong><small>{currentUser.role}</small></div></div>
     </aside>
     <main className="main">
-      <header className="topbar"><div className="branch"><span className="branch-dot" /><div><strong>{data.settings?.restaurantName}</strong><small>الفرع الرئيسي · البيانات محفوظة محليًا</small></div></div><div className="top-actions"><button className="chip" onClick={() => setModal("settings")}>⚙ إعدادات المطعم</button><button className="chip" onClick={exportBackup}>↓ نسخة احتياطية</button><button className="chip" onClick={reset}>⌫ مسح البيانات</button><button className="chip danger" onClick={logout}>خروج</button><span className={`chip shift-chip ${data.shifts.some(x=>x.status==="open")?"":"closed"}`}>● {data.shifts.some(x=>x.status==="open")?"وردية مفتوحة":"لا توجد وردية"}</span></div></header>
+      <header className="topbar"><div className="branch"><span className="branch-dot" /><div><strong>{data.settings?.restaurantName}</strong><small>الفرع الرئيسي · البيانات محفوظة محليًا</small></div></div><div className="top-actions">{roleHasPermission(currentUser.role,"settings.manage")&&<button className="chip" onClick={() => setModal("settings")}>⚙ إعدادات المطعم</button>}{roleHasPermission(currentUser.role,"backup.manage")&&<button className="chip" onClick={exportBackup}>↓ نسخة احتياطية</button>}{currentUser.role==="OWNER"&&<button className="chip" onClick={reset}>⌫ مسح البيانات</button>}<button className="chip danger" onClick={logout}>خروج</button><span className={`chip shift-chip ${data.shifts.some(x=>x.status==="open")?"":"closed"}`}>● {data.shifts.some(x=>x.status==="open")?"وردية مفتوحة":"لا توجد وردية"}</span></div></header>
       <div className="content">
-        {isWorkflowSection && <div className="flow-steps" aria-label="المخزون ثم المطبخ ثم التصنيع ثم المنتج التام ثم الكاشير">{navItems.map((item, index) => <span key={item.id} style={{ display: "contents" }}><button className={`flow-step ${navItems.findIndex((entry) => entry.id === section) >= index ? "done" : ""}`} onClick={() => setSection(item.id)}><b>{index + 1}</b>{item.label}</button>{index < navItems.length - 1 && <span className="flow-arrow">←</span>}</span>)}</div>}
-        <div className="page-head"><div><p className="eyebrow">{activeNav.eyebrow}</p><h1>{activeNav.label}</h1><p className="page-sub">{activeNav.description}</p></div><div className="head-actions">{section === "inventory" && <button className="btn primary" onClick={() => setModal("receipt")}>＋ إذن إضافة</button>}{section === "kitchen" && <button className="btn primary" onClick={() => setModal("transfer")}>⇄ تحويل إلى المطبخ</button>}{section === "production" && <button className="btn primary" onClick={() => setModal("production")}>⚙ أمر تصنيع</button>}{section === "hr" && <><button className="btn" onClick={() => setModal("payroll")}>ج إعداد راتب</button><button className="btn" onClick={() => setModal("attendance")}>◷ حضور وانصراف</button><button className="btn primary" onClick={() => setModal("employee")}>＋ موظف جديد</button></>}</div></div>
-        {isWorkflowSection && <StepGuide section={section as WorkflowSection} onNext={goNext} />}
-        {section === "inventory" && <InventoryView data={data} />}
-        {section === "kitchen" && <KitchenView data={data} />}
-        {section === "production" && <ProductionView data={data} />}
-        {section === "finished" && <FinishedView data={data} refresh={refresh} notify={notify} />}
-        {section === "pos" && <PosView data={data} cart={cart} setCart={setCart} payment={payment} setPayment={setPayment} refresh={refresh} notify={notify} onOpenShift={() => setSection("control")} />}
-        {section === "control" && <OperationsControlModule data={data} refresh={refresh} notify={notify} />}
-        {section === "business" && <BusinessControlModule username={data.settings?.username??"admin"} notify={notify} />}
-        {section === "accounts" && <FinanceModule data={data} refresh={refresh} notify={notify} />}
-        {section === "hr" && <HumanResourcesView data={data} />}
+        {isWorkflowSection && <div className="flow-steps" aria-label="دورة التشغيل المتاحة للمستخدم">{visibleWorkflow.map((item, index) => <span key={item.id} style={{ display: "contents" }}><button className={`flow-step ${visibleWorkflow.findIndex((entry) => entry.id === safeSection) >= index ? "done" : ""}`} onClick={() => setSection(item.id)}><b>{index + 1}</b>{item.label}</button>{index < visibleWorkflow.length - 1 && <span className="flow-arrow">←</span>}</span>)}</div>}
+        <div className="page-head"><div><p className="eyebrow">{activeNav.eyebrow}</p><h1>{activeNav.label}</h1><p className="page-sub">{activeNav.description}</p></div><div className="head-actions">{safeSection === "inventory" && <button className="btn primary" onClick={() => setModal("receipt")}>＋ إذن إضافة</button>}{safeSection === "kitchen" && <button className="btn primary" onClick={() => setModal("transfer")}>⇄ تحويل إلى المطبخ</button>}{safeSection === "production" && <button className="btn primary" onClick={() => setModal("production")}>⚙ أمر تصنيع</button>}{safeSection === "hr" && <><button className="btn" onClick={() => setModal("payroll")}>ج إعداد راتب</button><button className="btn" onClick={() => setModal("attendance")}>◷ حضور وانصراف</button><button className="btn primary" onClick={() => setModal("employee")}>＋ موظف جديد</button></>}</div></div>
+        {isWorkflowSection && <StepGuide section={safeSection as WorkflowSection} onNext={goNext} />}
+        {safeSection === "inventory" && <InventoryView data={data} />}
+        {safeSection === "kitchen" && <KitchenView data={data} />}
+        {safeSection === "production" && <ProductionView data={data} />}
+        {safeSection === "finished" && <FinishedView data={data} refresh={refresh} notify={notify} />}
+        {safeSection === "pos" && <PosView data={data} cart={cart} setCart={setCart} payment={payment} setPayment={setPayment} refresh={refresh} notify={notify} onOpenShift={() => setSection("control")} />}
+        {safeSection === "control" && <OperationsControlModule data={data} role={currentUser.role} user={currentUser.username} refresh={refresh} notify={notify} />}
+        {safeSection === "business" && <BusinessControlModule username={currentUser.username} role={currentUser.role} notify={notify} />}
+        {safeSection === "accounts" && <FinanceModule data={data} role={currentUser.role} user={currentUser.username} refresh={refresh} notify={notify} />}
+        {safeSection === "hr" && <HumanResourcesView data={data} />}
       </div>
     </main>
     {modal && <Modal title={modal === "receipt" ? "إذن إضافة إلى المخزون" : modal === "transfer" ? "تحويل إلى المطبخ" : modal === "production" ? "أمر تصنيع منتج تام" : modal === "expense" ? "تسجيل مصروف مطعم" : modal === "employee" ? "إضافة موظف" : modal === "attendance" ? "تسجيل حضور وانصراف" : modal === "payroll" ? "إعداد راتب موظف" : "إعدادات المطعم والدخول"} onClose={() => setModal(null)}>
@@ -208,7 +227,7 @@ export function RestaurantFlowApp() {
   </div>;
 }
 
-function AccountSetup({ onDone }: { onDone: () => void }) {
+function AccountSetup({ onDone }: { onDone: (user:LocalUser) => void | Promise<void> }) {
   const [error, setError] = useState("");
   const [logoDataUrl, setLogoDataUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -224,20 +243,19 @@ function AccountSetup({ onDone }: { onDone: () => void }) {
     if (password.length < 6) return setError("كلمة المرور يجب أن تكون 6 أحرف على الأقل");
     if (password !== confirm) return setError("تأكيد كلمة المرور غير مطابق");
     if (busy) return setError("انتظر حتى ينتهي تجهيز الشعار");
-    await db.settings.update("settings", { restaurantName: String(form.get("restaurantName")).trim(), logoDataUrl: logoDataUrl || undefined, username, passwordHash: await hashPassword(password) });
-    onDone();
+    const passwordHash=await hashPassword(password);await db.settings.update("settings", { restaurantName: String(form.get("restaurantName")).trim(), logoDataUrl: logoDataUrl || undefined, username, passwordHash });
+    await onDone(await ensureOwnerUser(username,passwordHash));
   };
   return <div className="auth-shell"><section className="auth-card"><div className="auth-brand"><BrandLogo settings={{ id: "settings", language: "ar", theme: "light", seeded: false, activeShift: true, restaurantName: "RestaurantFlow", logoDataUrl }} large /><div><span>إعداد مجاني لأول مرة</span><h1>جهّز حساب مطعمك</h1><p>أدخل اسم المطعم وشعاره وبيانات الدخول. تُحفظ على هذا الجهاز فقط.</p></div></div><form onSubmit={submit}>{error && <div className="form-error">{error}</div>}<div className="form-grid"><Field label="اسم المطعم" full><input name="restaurantName" required placeholder="مثال: مطعم السعادة" /></Field><Field label="اسم المستخدم"><input name="username" autoComplete="username" required placeholder="admin" /></Field><Field label="شعار المطعم (اختياري)"><label className="compact-upload"><input type="file" accept="image/png,image/jpeg,image/webp" onChange={chooseLogo} />{busy ? "جارٍ تجهيز الشعار…" : "رفع صورة الشعار"}</label></Field><Field label="كلمة المرور"><input name="password" type="password" autoComplete="new-password" minLength={6} required /></Field><Field label="تأكيد كلمة المرور"><input name="confirm" type="password" autoComplete="new-password" minLength={6} required /></Field></div><button className="btn primary auth-submit" type="submit">حفظ وفتح النظام</button></form><p className="auth-note">لا توجد اشتراكات أو خدمات مدفوعة. الحماية محلية لهذا المتصفح والجهاز.</p></section></div>;
 }
 
-function LoginScreen({ settings, onSuccess }: { settings: AppSettings; onSuccess: () => void | Promise<void> }) {
+function LoginScreen({ settings, onSuccess }: { settings: AppSettings; onSuccess: (user:LocalUser) => void | Promise<void> }) {
   const [error, setError] = useState("");
   const [recovering, setRecovering] = useState(false);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const form = new FormData(event.currentTarget);
     const username = String(form.get("username")).trim(); const password = String(form.get("password"));
-    if (username !== settings.username || await hashPassword(password) !== settings.passwordHash) return setError("اسم المستخدم أو كلمة المرور غير صحيحة");
-    await onSuccess();
+    try{await onSuccess(await authenticateLocalUser(username,password));}catch(cause){setError(cause instanceof Error?cause.message:"تعذر تسجيل الدخول");}
   };
   const recover = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const form = new FormData(event.currentTarget);
@@ -247,8 +265,9 @@ function LoginScreen({ settings, onSuccess }: { settings: AppSettings; onSuccess
     if (username.length < 3) return setError("اسم المستخدم الجديد يجب أن يكون 3 أحرف على الأقل");
     if (password.length < 6) return setError("كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل");
     if (password !== confirm) return setError("تأكيد كلمة المرور الجديدة غير مطابق");
-    await db.settings.update("settings", { username, passwordHash: await hashPassword(password) });
-    await onSuccess();
+    const passwordHash=await hashPassword(password);await db.settings.update("settings", { username, passwordHash });
+    const owners=await db.users.where("role").equals("OWNER").toArray(),owner=owners[0];if(owner)await db.users.update(owner.id,{username,passwordHash,updatedAt:new Date().toISOString(),active:true});
+    await onSuccess(owner?{...owner,username,passwordHash,active:true,updatedAt:new Date().toISOString()}:await ensureOwnerUser(username,passwordHash));
   };
   return <div className="auth-shell"><section className="auth-card login-card"><div className="auth-brand login-brand"><BrandLogo settings={settings} large /><div><span>{recovering ? "استرداد محلي آمن" : "مرحبًا بعودتك"}</span><h1>{settings.restaurantName}</h1><p>{recovering ? "عيّن اسم مستخدم وكلمة مرور جديدين دون حذف بيانات المطعم." : "سجّل الدخول لإدارة المخزون والتصنيع والكاشير."}</p></div></div>{recovering ? <form onSubmit={recover}>{error && <div className="form-error">{error}</div>}<div className="form-grid one-column"><Field label="اكتب اسم المطعم للتأكيد" full><input name="restaurantName" autoComplete="organization" required autoFocus /></Field><Field label="اسم المستخدم الجديد" full><input name="newUsername" autoComplete="username" minLength={3} required /></Field><Field label="كلمة المرور الجديدة" full><input name="newPassword" type="password" autoComplete="new-password" minLength={6} required /></Field><Field label="تأكيد كلمة المرور الجديدة" full><input name="newConfirm" type="password" autoComplete="new-password" minLength={6} required /></Field></div><div className="auth-recovery-actions"><button className="btn primary" type="submit">حفظ بيانات الدخول الجديدة</button><button className="btn" type="button" onClick={() => { setRecovering(false); setError(""); }}>العودة لتسجيل الدخول</button></div><p className="local-security-note">لن تُحذف أي مواد أو أرصدة أو وصفات أو فواتير. الاسترداد متاح فقط من نفس المتصفح الذي يحتوي على بيانات المطعم.</p></form> : <form onSubmit={submit}>{error && <div className="form-error">{error}</div>}<div className="form-grid one-column"><Field label="اسم المستخدم" full><input name="username" autoComplete="username" required autoFocus /></Field><Field label="كلمة المرور" full><input name="password" type="password" autoComplete="current-password" required /></Field></div><button className="btn primary auth-submit" type="submit">دخول إلى النظام</button><button className="auth-forgot" type="button" onClick={() => { setRecovering(true); setError(""); }}>نسيت اسم المستخدم أو كلمة المرور؟</button></form>}<p className="auth-note">بيانات الدخول خاصة بهذا المتصفح. الاسترداد المحلي يغير بيانات الدخول فقط ولا يمس بيانات التشغيل.</p></section></div>;
 }
@@ -365,10 +384,10 @@ function RestaurantSettingsForm({ settings, onDone }: { settings?: AppSettings; 
     if (password && password.length < 6) return setError("كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل");
     if (password !== confirm) return setError("تأكيد كلمة المرور غير مطابق");
     if (busy) return setError("انتظر حتى ينتهي تجهيز الشعار");
-    await db.settings.update("settings", { restaurantName: String(form.get("restaurantName")).trim(), logoDataUrl: logoDataUrl || undefined, username, passwordHash: password ? await hashPassword(password) : settings?.passwordHash });
+    await db.settings.update("settings", { restaurantName: String(form.get("restaurantName")).trim(), logoDataUrl: logoDataUrl || undefined, username, passwordHash: password ? await hashPassword(password) : settings?.passwordHash,wasteApprovalThresholdPiasters:Math.round(Number(form.get("wasteThreshold")||0)*100),stockVarianceApprovalThresholdPiasters:Math.round(Number(form.get("varianceThreshold")||0)*100),shiftDifferenceApprovalThresholdPiasters:Math.round(Number(form.get("shiftThreshold")||0)*100),discountApprovalThresholdPercent:Number(form.get("discountThreshold")||0) });
     onDone();
   };
-  return <FormShell error={error} onSubmit={submit} submitLabel="حفظ إعدادات المطعم"><Field label="اسم المطعم" full><input name="restaurantName" defaultValue={settings?.restaurantName} required /></Field><Field label="اسم المستخدم"><input name="username" defaultValue={settings?.username} autoComplete="username" required /></Field><Field label="الشعار"><div className="settings-logo"><BrandLogo settings={{ ...settings, id: "settings", language: settings?.language ?? "ar", theme: settings?.theme ?? "light", seeded: false, activeShift: settings?.activeShift ?? true, logoDataUrl }} /><label className="compact-upload"><input type="file" accept="image/png,image/jpeg,image/webp" onChange={chooseLogo} />تغيير الشعار</label>{logoDataUrl && <button type="button" className="btn small danger" onClick={() => setLogoDataUrl("")}>حذف</button>}</div></Field><Field label="كلمة مرور جديدة (اختياري)"><input name="password" type="password" autoComplete="new-password" placeholder="اتركها فارغة دون تغيير" /></Field><Field label="تأكيد كلمة المرور الجديدة"><input name="confirm" type="password" autoComplete="new-password" /></Field><Field label="معلومة مهمة" full><div className="local-security-note">يتم حفظ بصمة كلمة المرور والشعار محليًا داخل هذا المتصفح. لا تُرسل كلمة المرور إلى خادم خارجي.</div></Field></FormShell>;
+  return <FormShell error={error} onSubmit={submit} submitLabel="حفظ إعدادات المطعم"><Field label="اسم المطعم" full><input name="restaurantName" defaultValue={settings?.restaurantName} required /></Field><Field label="اسم المستخدم"><input name="username" defaultValue={settings?.username} autoComplete="username" required /></Field><Field label="الشعار"><div className="settings-logo"><BrandLogo settings={{ ...settings, id: "settings", language: settings?.language ?? "ar", theme: settings?.theme ?? "light", seeded: false, activeShift: settings?.activeShift ?? true, logoDataUrl }} /><label className="compact-upload"><input type="file" accept="image/png,image/jpeg,image/webp" onChange={chooseLogo} />تغيير الشعار</label>{logoDataUrl && <button type="button" className="btn small danger" onClick={() => setLogoDataUrl("")}>حذف</button>}</div></Field><Field label="حد موافقة الهالك بالجنيه"><input name="wasteThreshold" type="number" min="0" step=".01" defaultValue={(settings?.wasteApprovalThresholdPiasters??0)/100}/></Field><Field label="حد موافقة فرق الجرد بالجنيه"><input name="varianceThreshold" type="number" min="0" step=".01" defaultValue={(settings?.stockVarianceApprovalThresholdPiasters??0)/100}/></Field><Field label="حد فرق الوردية بالجنيه"><input name="shiftThreshold" type="number" min="0" step=".01" defaultValue={(settings?.shiftDifferenceApprovalThresholdPiasters??0)/100}/></Field><Field label="حد الخصم الذي يحتاج موافقة %"><input name="discountThreshold" type="number" min="0" max="100" step=".1" defaultValue={settings?.discountApprovalThresholdPercent??0}/></Field><Field label="كلمة مرور جديدة (اختياري)"><input name="password" type="password" autoComplete="new-password" placeholder="اتركها فارغة دون تغيير" /></Field><Field label="تأكيد كلمة المرور الجديدة"><input name="confirm" type="password" autoComplete="new-password" /></Field><Field label="معلومة مهمة" full><div className="local-security-note">يتم حفظ بصمة كلمة المرور والشعار محليًا داخل هذا المتصفح. لا تُرسل كلمة المرور إلى خادم خارجي.</div></Field></FormShell>;
 }
 
 function StockReceiptForm({ data, onDone }: { data: AppData; onDone: () => void }) {
