@@ -86,6 +86,7 @@ export async function addOpeningStock(input: {
   unitCostPiasters: number;
   reference?: string;
   note?: string;
+  skipAccounting?: boolean;
 }) {
   return db.transaction("rw", [db.units, db.items, db.warehouses, db.balances, db.movements, db.accounts, db.journalEntries, db.journalLines], async () => {
     if (input.unitCostPiasters < 0) throw new Error("التكلفة لا يمكن أن تكون سالبة");
@@ -126,7 +127,7 @@ export async function addOpeningStock(input: {
       note: input.note, createdAt: timestamp, updatedAt: timestamp, createdBy: actor,
     };
     await db.movements.put(movement);
-    await postInventoryReceipt(movement.id, movement.reference, totalCostPiasters);
+    if (!input.skipAccounting) await postInventoryReceipt(movement.id, movement.reference, totalCostPiasters);
     return movement;
   });
 }

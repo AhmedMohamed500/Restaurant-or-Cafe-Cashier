@@ -11,9 +11,11 @@ import { formatMoney, formatQuantity } from "@/src/lib/money";
 import { hashPassword } from "@/src/lib/auth";
 import { FinanceModule } from "@/src/features/finance/FinanceModule";
 import { OperationsControlModule } from "@/src/features/operations/OperationsControlModule";
+import { BusinessControlModule } from "@/src/features/administration/BusinessControlModule";
+import { ensureRolePermissions } from "@/src/domain/authorization-service";
 
 type WorkflowSection = "inventory" | "kitchen" | "production" | "finished" | "pos";
-type Section = WorkflowSection | "control" | "accounts" | "hr";
+type Section = WorkflowSection | "control" | "business" | "accounts" | "hr";
 type ModalName = "receipt" | "transfer" | "production" | "settings" | "expense" | "employee" | "attendance" | "payroll" | null;
 
 const navItems: { id: WorkflowSection; icon: string; label: string; eyebrow: string; description: string }[] = [
@@ -26,6 +28,7 @@ const navItems: { id: WorkflowSection; icon: string; label: string; eyebrow: str
 
 const managementItems: { id: Section; icon: string; label: string; eyebrow: string; description: string }[] = [
   { id: "control", icon: "⌁", label: "الرقابة والتشغيل", eyebrow: "لوحة تحكم المالك", description: "راقب الورديات والنقدية والجرد والهالك وتكلفة الطعام والتنبيهات من مكان واحد." },
+  { id: "business", icon: "▣", label: "المشتريات والإدارة", eyebrow: "التحكم المؤسسي", description: "طلبات وأوامر الشراء والاستلام والموافقات والمستخدمون والنسخ الاحتياطي والتقارير." },
   { id: "accounts", icon: "ج", label: "الحسابات", eyebrow: "الإدارة المالية", description: "تابع المبيعات وتكلفة المبيعات والمصروفات والربحية وطرق التحصيل." },
   { id: "hr", icon: "♟", label: "الموارد البشرية", eyebrow: "إدارة فريق العمل", description: "سجّل الموظفين والحضور والانصراف والرواتب والسلف والخصومات." },
 ];
@@ -140,7 +143,7 @@ export function RestaurantFlowApp() {
     setData({ units, items, warehouses, balances, recipes, movements, productionOrders, saleOrders, expenses, employees, attendanceRecords, payrollRecords, accounts, journalEntries, journalLines, suppliers, purchaseInvoices, purchaseInvoiceLines, supplierPayments, cashAccounts, cashTransfers, shifts, shiftCashMovements, stockCounts, stockCountLines, wasteEntries, auditLogs, alerts, settings });
   }, []);
   useEffect(() => {
-    ensureEmptyWorkspace().then(ensureDefaultAccountingSetup).then(refresh).then(async () => {
+    ensureEmptyWorkspace().then(ensureDefaultAccountingSetup).then(ensureRolePermissions).then(refresh).then(async () => {
       const settings = await db.settings.get("settings");
       setAuthenticated(Boolean(settings?.passwordHash && sessionStorage.getItem(AUTH_SESSION_KEY) === "1"));
       setReady(true);
@@ -152,7 +155,7 @@ export function RestaurantFlowApp() {
   const goNext = () => { const index = navItems.findIndex((item) => item.id === section); if (index >= 0) setSection(navItems[Math.min(navItems.length - 1, index + 1)].id); };
   const reset = async () => {
     if (!window.confirm("سيتم حذف جميع بيانات المطعم نهائيًا. هل تريد المتابعة؟")) return;
-    await resetAllData(); await ensureEmptyWorkspace(); await ensureDefaultAccountingSetup(); await refresh(); setCart([]); setSection("inventory"); notify("تمت إعادة النظام إلى بداية دورة التشغيل");
+    await resetAllData(); await ensureEmptyWorkspace(); await ensureDefaultAccountingSetup(); await ensureRolePermissions(); await refresh(); setCart([]); setSection("inventory"); notify("تمت إعادة النظام إلى بداية دورة التشغيل");
   };
   const exportBackup = async () => {
     const payload = { version: 4, exportedAt: new Date().toISOString(), units: await db.units.toArray(), items: await db.items.toArray(), warehouses: await db.warehouses.toArray(), balances: await db.balances.toArray(), recipes: await db.recipes.toArray(), movements: await db.movements.toArray(), productionOrders: await db.productionOrders.toArray(), saleOrders: await db.saleOrders.toArray(), expenses: await db.expenses.toArray(), employees: await db.employees.toArray(), attendanceRecords: await db.attendanceRecords.toArray(), payrollRecords: await db.payrollRecords.toArray(), accounts: await db.accounts.toArray(), journalEntries: await db.journalEntries.toArray(), journalLines: await db.journalLines.toArray(), suppliers: await db.suppliers.toArray(), purchaseInvoices: await db.purchaseInvoices.toArray(), purchaseInvoiceLines: await db.purchaseInvoiceLines.toArray(), supplierPayments: await db.supplierPayments.toArray(), cashAccounts: await db.cashAccounts.toArray(), cashTransfers: await db.cashTransfers.toArray(), shifts: await db.shifts.toArray() };
@@ -186,6 +189,7 @@ export function RestaurantFlowApp() {
         {section === "finished" && <FinishedView data={data} refresh={refresh} notify={notify} />}
         {section === "pos" && <PosView data={data} cart={cart} setCart={setCart} payment={payment} setPayment={setPayment} refresh={refresh} notify={notify} onOpenShift={() => setSection("control")} />}
         {section === "control" && <OperationsControlModule data={data} refresh={refresh} notify={notify} />}
+        {section === "business" && <BusinessControlModule username={data.settings?.username??"admin"} notify={notify} />}
         {section === "accounts" && <FinanceModule data={data} refresh={refresh} notify={notify} />}
         {section === "hr" && <HumanResourcesView data={data} />}
       </div>

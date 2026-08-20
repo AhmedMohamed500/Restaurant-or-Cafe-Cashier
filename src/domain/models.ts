@@ -332,6 +332,21 @@ export interface OperationalAlert {
   createdAt: string; resolvedAt?: string;
 }
 
+export type Permission = "inventory.view"|"inventory.receive"|"inventory.transfer"|"production.view"|"production.execute"|"purchases.request"|"purchases.approve_request"|"purchases.create_order"|"purchases.approve_order"|"purchases.receive"|"waste.create"|"waste.approve"|"stock_count.create"|"stock_count.approve"|"cashier.sell"|"cashier.discount"|"cashier.refund"|"shifts.open"|"shifts.close"|"shifts.approve_difference"|"accounting.view"|"accounting.post"|"accounting.reverse"|"reports.financial"|"users.manage"|"settings.manage";
+export type UserRole = "OWNER"|"MANAGER"|"ACCOUNTANT"|"STOREKEEPER"|"CASHIER"|"KITCHEN";
+export interface LocalUser extends AuditFields { id:EntityId; username:string; displayName:string; passwordHash:string; role:UserRole; active:boolean; }
+export interface RolePermission { id:EntityId; role:UserRole; permission:Permission; }
+export interface Approval extends AuditFields { id:EntityId; entityType:string; entityId:EntityId; reference:string; requestedBy:string; requestedAt:string; status:"pending"|"approved"|"rejected"; approvedBy?:string; approvedAt?:string; rejectedBy?:string; rejectedAt?:string; rejectionReason?:string; notes?:string; }
+export interface PurchaseRequest extends AuditFields { id:EntityId; number:string; requestDate:string; requestedBy:string; requiredDate:string; warehouseId:EntityId; notes?:string; status:"draft"|"pending_approval"|"approved"|"rejected"|"converted"; }
+export interface PurchaseRequestLine { id:EntityId; purchaseRequestId:EntityId; itemId:EntityId; currentStock:number; minimumStock:number; requestedQuantity:number; unitId:EntityId; estimatedCostPiasters:number; notes?:string; }
+export interface ProcurementOrder extends AuditFields { id:EntityId; number:string; requestId?:EntityId; supplierId:EntityId; orderDate:string; expectedDeliveryDate:string; warehouseId:EntityId; paymentTerms?:string; notes?:string; status:"draft"|"pending_approval"|"approved"|"partially_received"|"fully_received"|"cancelled"|"closed"; subtotalPiasters:number; discountPiasters:number; vatPiasters:number; totalPiasters:number; }
+export interface ProcurementOrderLine { id:EntityId; purchaseOrderId:EntityId; itemId:EntityId; orderedQuantity:number; receivedQuantity:number; unitId:EntityId; unitPricePiasters:number; discountPiasters:number; vatRate:number; lineTotalPiasters:number; }
+export interface GoodsReceipt { id:EntityId; number:string; purchaseOrderId:EntityId; supplierId:EntityId; warehouseId:EntityId; receiptDate:string; receivedBy:string; notes?:string; status:"posted"; createdAt:string; updatedAt:string; createdBy:string; }
+export interface GoodsReceiptLine { id:EntityId; goodsReceiptId:EntityId; purchaseOrderLineId:EntityId; itemId:EntityId; quantity:number; unitId:EntityId; unitCostPiasters:number; }
+export interface SupplierInvoiceRecord extends AuditFields { id:EntityId; number:string; supplierInvoiceNumber:string; supplierId:EntityId; invoiceDate:string; dueDate:string; purchaseOrderId?:EntityId; goodsReceiptId?:EntityId; subtotalPiasters:number; discountPiasters:number; vatPiasters:number; totalPiasters:number; paidPiasters:number; matchingStatus:"matched"|"quantity_difference"|"price_difference"|"unmatched"; status:"unpaid"|"partially_paid"|"paid"; notes?:string; }
+export interface SupplierInvoiceRecordLine { id:EntityId; supplierInvoiceId:EntityId; itemId:EntityId; quantity:number; unitId:EntityId; unitCostPiasters:number; discountPiasters:number; vatRate:number; totalPiasters:number; }
+export interface PurchaseReturnRecord extends AuditFields { id:EntityId; number:string; supplierId:EntityId; goodsReceiptId?:EntityId; supplierInvoiceId?:EntityId; warehouseId:EntityId; itemId:EntityId; quantity:number; unitId:EntityId; reason:"damaged"|"wrong_item"|"quality"|"expired"|"supplier_error"|"other"; totalPiasters:number; status:"posted"; }
+
 export interface Employee extends AuditFields {
   id: EntityId;
   code: string;
