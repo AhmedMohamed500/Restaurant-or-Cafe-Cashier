@@ -124,6 +124,7 @@ export function RestaurantFlowApp() {
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [payment, setPayment] = useState<"cash" | "card" | "wallet">("cash");
   const [authenticated, setAuthenticated] = useState(false);
+  const [initializationError, setInitializationError] = useState("");
 
   const notify = useCallback((text: string, error = false) => {
     setToast({ text, error }); window.setTimeout(() => setToast(null), 3800);
@@ -134,7 +135,7 @@ export function RestaurantFlowApp() {
       db.movements.orderBy("createdAt").reverse().toArray(), db.productionOrders.orderBy("createdAt").reverse().toArray(),
       db.saleOrders.orderBy("createdAt").reverse().toArray(), db.expenses.orderBy("expenseDate").reverse().toArray(),
       db.employees.toArray(), db.attendanceRecords.orderBy("workDate").reverse().toArray(), db.payrollRecords.orderBy("month").reverse().toArray(),
-      db.accounts.orderBy("code").toArray(), db.journalEntries.orderBy("date").reverse().toArray(), db.journalLines.toArray(), db.suppliers.orderBy("name").toArray(), db.purchaseInvoices.orderBy("date").reverse().toArray(), db.purchaseInvoiceLines.toArray(), db.supplierPayments.orderBy("date").reverse().toArray(), db.cashAccounts.toArray(), db.cashTransfers.orderBy("date").reverse().toArray(), db.shifts.orderBy("openedAt").reverse().toArray(), db.shiftCashMovements.orderBy("occurredAt").reverse().toArray(), db.stockCounts.orderBy("createdAt").reverse().toArray(), db.stockCountLines.toArray(), db.wasteEntries.orderBy("occurredAt").reverse().toArray(), db.auditLogs.orderBy("timestamp").reverse().toArray(), db.alerts.orderBy("createdAt").reverse().toArray(), db.settings.get("settings"),
+      db.accounts.orderBy("code").toArray(), db.journalEntries.orderBy("date").reverse().toArray(), db.journalLines.toArray(), db.suppliers.orderBy("name").toArray(), db.purchaseInvoices.orderBy("date").reverse().toArray(), db.purchaseInvoiceLines.toArray(), db.supplierPayments.orderBy("date").reverse().toArray(), db.cashAccounts.toArray(), db.cashTransfers.orderBy("date").reverse().toArray(), db.shifts.orderBy("openedAt").reverse().toArray(), db.shiftCashMovements.orderBy("occurredAt").reverse().toArray(), db.stockCounts.toArray().then((rows) => rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))), db.stockCountLines.toArray(), db.wasteEntries.orderBy("occurredAt").reverse().toArray(), db.auditLogs.orderBy("timestamp").reverse().toArray(), db.alerts.orderBy("createdAt").reverse().toArray(), db.settings.get("settings"),
     ]);
     setData({ units, items, warehouses, balances, recipes, movements, productionOrders, saleOrders, expenses, employees, attendanceRecords, payrollRecords, accounts, journalEntries, journalLines, suppliers, purchaseInvoices, purchaseInvoiceLines, supplierPayments, cashAccounts, cashTransfers, shifts, shiftCashMovements, stockCounts, stockCountLines, wasteEntries, auditLogs, alerts, settings });
   }, []);
@@ -143,7 +144,7 @@ export function RestaurantFlowApp() {
       const settings = await db.settings.get("settings");
       setAuthenticated(Boolean(settings?.passwordHash && sessionStorage.getItem(AUTH_SESSION_KEY) === "1"));
       setReady(true);
-    }).catch((error) => notify(error.message, true));
+    }).catch((error) => { setInitializationError(error instanceof Error ? error.message : "تعذر تهيئة البيانات المحلية"); setReady(true); });
   }, [notify, refresh]);
 
   const activeNav = allNavItems.find((item) => item.id === section)!;
@@ -161,6 +162,7 @@ export function RestaurantFlowApp() {
   const logout = () => { sessionStorage.removeItem(AUTH_SESSION_KEY); setAuthenticated(false); setCart([]); };
 
   if (!ready) return <div className="loading"><div className="loading-card"><div className="loader" /><strong>جاري تجهيز RestaurantFlow</strong><p className="page-sub">تحميل دورة التشغيل…</p></div></div>;
+  if (initializationError) return <div className="loading"><div className="loading-card"><strong>تعذر فتح RestaurantFlow</strong><p className="page-sub">{initializationError}</p><button className="btn primary" onClick={() => window.location.reload()}>إعادة المحاولة</button></div></div>;
   if (!data.settings?.passwordHash) return <AccountSetup onDone={async () => { sessionStorage.setItem(AUTH_SESSION_KEY, "1"); setAuthenticated(true); await refresh(); }} />;
   if (!authenticated) return <LoginScreen settings={data.settings} onSuccess={async () => { sessionStorage.setItem(AUTH_SESSION_KEY, "1"); setAuthenticated(true); await refresh(); }} />;
   return <div className="app-shell">
